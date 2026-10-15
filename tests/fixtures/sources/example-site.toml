@@ -1,0 +1,31 @@
+format_version = 1
+identifier = "example-site"
+name = "Example Site"
+version = "1.0.0"
+description = "Test fixture"
+home_url = "https://example.org/"
+hosts = ["example.org"]
+
+[urls]
+novel_pattern = "^/novel/[^/]+/?$"
+chapter_pattern = "^/novel/[^/]+/chapter-"
+
+[novel_list]
+page = "https://example.org/"
+links = "div.novels a"
+
+[novel]
+title = "h1.title"
+status = "p.status"
+description = "div.summary"
+description_text = "own"
+chapters = "ul.free a"
+locked_chapters = "ul.locked a"
+chapter_order = "newest_first"
+
+[chapter]
+title = "h1.chapter-title"
+content = "div.text"
+novel_link = "a.back"
+previous = "div.navigation > a.previous"
+next = "div.navigation > a.next"
