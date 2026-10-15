@@ -16,6 +16,7 @@ from novelterm.library import Library, LibraryEntry, LibrarySort, url_with_same_
 from novelterm.models import Chapter, ChapterLink, LinkKind, Listing, NovelDetails, NovelListPage, NovelSummary
 from novelterm.network import MINIMUM_SECONDS_BETWEEN_REQUESTS, FetchError, FetchFailure
 from novelterm.paths import LOCAL_SOURCES_DIRECTORY, SETTINGS_FILE
+from novelterm.reader_view import ReaderView
 from novelterm.repositories import (
     EntryKind,
     EntryStatus,
@@ -61,7 +62,8 @@ from novelterm.ui import (
     show_progress,
 )
 
-READER_HINT = "Up/Down scroll | Space page | <-/-> chapter | q back"
+READER_HINT = "Up/Down line | Space page | <-/-> chapter | q back"
+READING_POINTER = ">"
 CHAPTER_CACHE_SIZE = 20
 """Chapters kept in memory, so that going back and forth does not download them again."""
 DOWNLOAD_BATCH_SIZES = (10, 50)
@@ -1079,30 +1081,28 @@ class App:
             self.remember_chapter_list(novel_url)
 
         notice = ""
-        lines: list[tuple[str, int]] = []
-        top_line = 0
-        layout_width = -1
+        lines: list[LayoutLine] = []
+        view: ReaderView | None = None
+        layout_size = (-1, -1)
         offline_label = " (offline)" if self.downloads.has(chapter.url) else ""
 
         while True:
             height, width = self.screen.getmaxyx()
             visible_rows = max(1, height - 2)
             text_width = min(self.settings.line_width, width - 4)
-            if width != layout_width:
+            if (height, width) != layout_size or view is None:
                 lines = layout_chapter(chapter, text_width, self.settings.paragraph_spacing, attributes)
-                layout_width = width
-                top_line = round(scroll_fraction * max(0, len(lines) - visible_rows))
-            last_top_line = max(0, len(lines) - visible_rows)
-            top_line = max(0, min(top_line, last_top_line))
-            scroll_fraction = top_line / last_top_line if last_top_line else 1.0
+                layout_size = (height, width)
+                view = ReaderView.at_fraction([line.readable for line in lines], visible_rows, view.fraction if view else scroll_fraction)
 
             self.screen.bkgd(" ", attributes.text)
             self.screen.erase()
             draw_bar(self.screen, 0, f"{novel_title} > {chapter.title}{offline_label}")
             left_margin = max(0, (width - text_width) // 2)
-            for row, (text, line_attributes) in enumerate(lines[top_line : top_line + visible_rows]):
-                put(self.screen, row + 1, left_margin, text, line_attributes)
-            percent = f"{round(100 * scroll_fraction)}%"
+            for row, line in enumerate(lines[view.top_line : view.top_line + visible_rows]):
+                put(self.screen, row + 1, left_margin, line.text, line.attributes)
+            put(self.screen, view.pointer_line - view.top_line + 1, max(0, left_margin - 2), READING_POINTER, attributes.accent)
+            percent = f"{round(100 * view.fraction)}%"
             match notice:
                 case "":
                     draw_footer(self.screen, READER_HINT, attributes.dim)
@@ -1112,26 +1112,26 @@ class App:
             self.screen.refresh()
 
             notice = ""
-            at_end = top_line >= last_top_line
             pressed = read_key(self.screen)
             match pressed:
                 case KeyPress(Key.UP) | KeyPress(Key.CHARACTER, "k"):
-                    top_line -= 1
+                    view = view.line_up()
                 case KeyPress(Key.DOWN) | KeyPress(Key.CHARACTER, "j"):
-                    top_line += 1
-                case KeyPress(Key.PAGE_DOWN) | KeyPress(Key.CHARACTER, " ") if at_end and chapter.next_url:
+                    view = view.line_down()
+                case KeyPress(Key.PAGE_DOWN) | KeyPress(Key.CHARACTER, " ") if view.at_end and chapter.next_url:
                     save_progress(1.0, finished=True)
                     return ReaderOutcome.NEXT_CHAPTER
-                case KeyPress(Key.PAGE_DOWN) | KeyPress(Key.CHARACTER, " ") if at_end:
+                case KeyPress(Key.PAGE_DOWN) | KeyPress(Key.CHARACTER, " ") if view.at_end:
+                    view = view.last()
                     notice = "End of the newest free chapter."
                 case KeyPress(Key.PAGE_DOWN) | KeyPress(Key.CHARACTER, " "):
-                    top_line += visible_rows - 2
+                    view = view.page_down()
                 case KeyPress(Key.PAGE_UP) | KeyPress(Key.CHARACTER, "b"):
-                    top_line -= visible_rows - 2
+                    view = view.page_up()
                 case KeyPress(Key.HOME) | KeyPress(Key.CHARACTER, "g"):
-                    top_line = 0
+                    view = view.first()
                 case KeyPress(Key.END) | KeyPress(Key.CHARACTER, "G"):
-                    top_line = last_top_line
+                    view = view.last()
                 case KeyPress(Key.RIGHT) | KeyPress(Key.CHARACTER, "n"):
                     match chapter.next_url:
                         case str():
@@ -1146,7 +1146,7 @@ class App:
                         case None:
                             notice = "This is the first chapter."
                 case KeyPress(Key.ESCAPE) | KeyPress(Key.BACKSPACE) | KeyPress(Key.CHARACTER, "q"):
-                    save_progress(scroll_fraction, finished=at_end)
+                    save_progress(view.fraction, finished=view.at_end)
                     return ReaderOutcome.BACK
                 case _:
                     pass
@@ -1406,25 +1406,34 @@ def changed_setting(settings: Settings, choice: SettingChoice) -> Settings:
             return replace(settings, library_sort=next_in_cycle(tuple(LibrarySort), settings.library_sort))
 
 
-def layout_chapter(chapter: Chapter, width: int, paragraph_spacing: int, attributes: ReaderAttributes) -> list[tuple[str, int]]:
+@dataclass(frozen=True)
+class LayoutLine:
+    text: str
+    attributes: int
+    readable: bool = False
+    """The chapter title or chapter text: a line the reading pointer can be on."""
+
+
+def layout_chapter(chapter: Chapter, width: int, paragraph_spacing: int, attributes: ReaderAttributes) -> list[LayoutLine]:
     width = max(20, width)
-    lines: list[tuple[str, int]] = [(line, attributes.title) for line in textwrap.wrap(chapter.title, width)]
-    lines.append(("", attributes.text))
+    empty = LayoutLine("", attributes.text)
+    lines = [LayoutLine(line, attributes.title, readable=True) for line in textwrap.wrap(chapter.title, width)]
+    lines.append(empty)
     match image_notice(chapter):
         case str(notice):
-            lines += [(line, attributes.dim) for line in textwrap.wrap(notice, width)]
-            lines.append(("", attributes.text))
+            lines += [LayoutLine(line, attributes.dim) for line in textwrap.wrap(notice, width)]
+            lines.append(empty)
         case None:
             pass
-    spacing = [("", attributes.text)] * paragraph_spacing
+    spacing = [empty] * paragraph_spacing
     for paragraph in chapter.paragraphs:
         for paragraph_line in paragraph.split("\n"):
-            lines += [(wrapped, attributes.text) for wrapped in textwrap.wrap(paragraph_line, width)]
+            lines += [LayoutLine(wrapped, attributes.text, readable=True) for wrapped in textwrap.wrap(paragraph_line, width)]
         lines += spacing
-    lines.append(("", attributes.text))
-    lines.append(("-- End of chapter --".center(width), attributes.dim))
+    lines.append(empty)
+    lines.append(LayoutLine("-- End of chapter --".center(width), attributes.dim))
     if chapter.next_url:
-        lines.append(("Press Space or -> for the next chapter".center(width), attributes.accent))
+        lines.append(LayoutLine("Press Space or -> for the next chapter".center(width), attributes.accent))
     return lines
 
 

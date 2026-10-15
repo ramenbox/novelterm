@@ -1,6 +1,7 @@
 import unittest
+from dataclasses import replace
 
-from novelterm.app import image_notice, layout_chapter
+from novelterm.app import LayoutLine, image_notice, layout_chapter
 from novelterm.models import Chapter
 from novelterm.ui import ReaderAttributes
 
@@ -32,7 +33,12 @@ class ImageNoticeTests(unittest.TestCase):
     def test_notice_is_below_the_title(self) -> None:
         attributes = ReaderAttributes(text=0, title=1, dim=2, accent=3)
         lines = layout_chapter(chapter(["Text."], 3), 80, 1, attributes)
-        self.assertEqual(lines[2], ("3 images in this chapter not shown. novelterm shows text only.", 2))
+        self.assertEqual(lines[2], LayoutLine("3 images in this chapter not shown. novelterm shows text only.", 2))
+
+    def test_only_title_and_text_are_readable(self) -> None:
+        attributes = ReaderAttributes(text=0, title=1, dim=1, accent=1)
+        lines = layout_chapter(replace(chapter(["Text."], 1), next_url="https://example.org/novel/first/chapter-2"), 80, 1, attributes)
+        self.assertEqual([line.text for line in lines if line.readable], ["Chapter", "Text."])
 
 
 if __name__ == "__main__":

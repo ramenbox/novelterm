@@ -27,14 +27,14 @@ novelterm
 | Screen | Keys |
 |---|---|
 | Menus | `Up`/`Down` or `j`/`k` move, `Enter` or `Right` open, `Left` / `Esc` / `Backspace` / `q` back, `/` search (long lists) |
-| Reader | `Up`/`Down` or `j`/`k` scroll, `Space` / `b` page, `g` / `G` top or bottom, `Right` / `Left` next or previous chapter, `q` back. `Space` at the end of a chapter opens the next chapter. |
+| Reader | `Up`/`Down` or `j`/`k` move the reading pointer `>` one line, `Space` / `b` page, `g` / `G` top or bottom, `Right` / `Left` next or previous chapter, `q` back. `Space` at the end of a chapter opens the next chapter. |
 | Library | `s` change the sort order, `d` remove the selected novel |
 | Long tasks | `q` or `Esc` stops a download or an update check |
 | Home | Back keys do not quit. Select **Quit** to close novelterm. |
 
 Home screens:
 
-- **Continue reading**: opens the last chapter at the saved scroll position.
+- **Continue reading**: opens the last chapter at the saved line.
 - **Library**: novels you started or added, with the number of unread chapters.
 - **Check for updates**: loads the novel page of each library novel and lists the novels with new chapters.
 - **Browse sources**: novel list of each installed source, and search when the source supports it.
@@ -45,6 +45,13 @@ Home screens:
 - **Settings**: reader line width, theme, paragraph spacing, library sort.
 
 Reading:
+
+- A `>` in the left margin marks the line you are on. It moves only over the
+  chapter title and text. The text scrolls when the `>` reaches the top or bottom
+  edge. `Space` shows the next page and puts the `>` on the first line that was
+  not on screen before.
+- **Continue reading** opens the chapter with the `>` on the saved line. The
+  percentage in the bottom right is the position of the `>` in the chapter.
 
 - A novel goes into the library when you open one of its chapters.
 - A chapter is marked as read when you go to the next chapter, or when you leave it at the end.
