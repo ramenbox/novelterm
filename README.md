@@ -32,6 +32,10 @@ novelterm
 | Long tasks | `q` or `Esc` stops a download or an update check |
 | Home | Back keys do not quit. Select **Quit** to close novelterm. |
 
+Home shows the logo when the terminal has room for it: the full logo from 88
+columns, only the icon in narrower terminals, and no logo when the terminal is too
+short for the logo and the whole menu.
+
 Home screens:
 
 - **Continue reading**: opens the last chapter at the saved line.

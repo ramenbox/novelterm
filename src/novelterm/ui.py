@@ -5,6 +5,7 @@ import textwrap
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from novelterm.logo import BOOKMARK, LOGO_HEIGHT, NAME, NAME_GAP, PROMPT, SIDE_MARGIN, LogoSize, logo_size
 from novelterm.settings import ReaderTheme
 
 APP_NAME = "novelterm"
@@ -247,6 +248,21 @@ def item_attributes(style: ItemStyle) -> int:
             return dim()
 
 
+def draw_logo(screen: curses.window, top_row: int, size: LogoSize) -> None:
+    """The prompt in the text color, the bookmark in the accent color, and for FULL the name in the title color."""
+    bookmark_column = SIDE_MARGIN + len(PROMPT[0])
+    name_column = bookmark_column + len(BOOKMARK[0]) + len(NAME_GAP)
+    for offset in range(LOGO_HEIGHT):
+        row = top_row + offset
+        put(screen, row, SIDE_MARGIN, PROMPT[offset], curses.A_BOLD)
+        put(screen, row, bookmark_column, BOOKMARK[offset], color(ColorPair.ACCENT) | curses.A_BOLD)
+        match size:
+            case LogoSize.FULL:
+                put(screen, row, name_column, NAME[offset], color(ColorPair.TITLE) | curses.A_BOLD)
+            case LogoSize.ICON:
+                pass
+
+
 def run_menu(
     screen: curses.window,
     breadcrumb: str,
@@ -258,6 +274,7 @@ def run_menu(
     top_level_notice: str | None = None,
     extra_keys: dict[str, object] | None = None,
     extra_hint: str = "",
+    show_logo: bool = False,
 ) -> MenuResult:
     """Show a list. The user picks one item with the arrow keys and Enter, or goes back.
 
@@ -265,6 +282,7 @@ def run_menu(
     This stops a quick double "back" from closing the app.
     extra_keys maps a character to an action. The key returns KeyAction(action, selected
     item value); extra_hint describes these keys in the footer.
+    With show_logo set, the largest logo that leaves room for all items is drawn above the title.
     """
     extra_keys = extra_keys or {}
     selected_index = max(0, min(initial_index, len(items) - 1))
@@ -280,14 +298,22 @@ def run_menu(
         screen.erase()
         height, width = screen.getmaxyx()
         draw_bar(screen, 0, APP_NAME, breadcrumb)
+        text_width = max(20, min(width - 4, 90))
+        wrapped_intro = [wrapped for line in intro_lines for wrapped in textwrap.wrap(line, text_width) or [""]]
+        rows_without_logo = 2 + 1 + len(wrapped_intro) + 2 + len(visible_items) + 2
+        size = logo_size(width, height - rows_without_logo) if show_logo else None
         row = 2
+        match size:
+            case LogoSize():
+                draw_logo(screen, row, size)
+                row += LOGO_HEIGHT + 1
+            case None:
+                pass
         put(screen, row, 2, title, color(ColorPair.TITLE) | curses.A_BOLD)
         row += 1
-        text_width = max(20, min(width - 4, 90))
-        for line in intro_lines:
-            for wrapped in textwrap.wrap(line, text_width) or [""]:
-                row += 1
-                put(screen, row, 2, wrapped)
+        for wrapped in wrapped_intro:
+            row += 1
+            put(screen, row, 2, wrapped)
         row += 2
 
         list_height = max(1, height - row - 2)

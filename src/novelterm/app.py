@@ -282,6 +282,7 @@ class App:
                 intro_lines=["Read web novels in your terminal.", "What do you want to read today?"],
                 items=items,
                 top_level_notice="You are on Home. Select Quit to close novelterm.",
+                show_logo=True,
             )
             match result:
                 case Selected(HomeChoice.CONTINUE_READING) if recent:
