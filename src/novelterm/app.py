@@ -297,7 +297,7 @@ class App:
             case (None, _):
                 pass
             case (Source(), str(chapter_url)):
-                self.read(source, chapter_url, entry.scroll_fraction, saved_entry=entry)
+                self.read(source, chapter_url, entry.scroll_fraction, saved_entry=entry, novel_url=entry.novel_url)
             case (Source(), None):
                 self.novel_screen(source, entry.novel_url, saved_entry=entry)
 
@@ -561,7 +561,7 @@ class App:
             )
             match result:
                 case Selected(ReadChapter(url, scroll_fraction)):
-                    self.read(source, url, scroll_fraction)
+                    self.read(source, url, scroll_fraction, novel_url=details.url)
                 case Selected(ShowAllChapters()):
                     self.chapter_list_screen(source, details)
                 case Selected(ShowDownloads()):
@@ -611,7 +611,7 @@ class App:
             )
             match result:
                 case Selected(str(chapter_url)):
-                    self.read(source, chapter_url)
+                    self.read(source, chapter_url, novel_url=details.url)
                 case _:
                     return
 
@@ -952,9 +952,22 @@ class App:
 
     # Reader
 
-    def read(self, source: Source, chapter_url: str, scroll_fraction: float = 0.0, saved_entry: LibraryEntry | None = None) -> None:
-        """Read from chapter_url on. With saved_entry set, a missing first chapter offers to find the novel again."""
+    def read(
+        self,
+        source: Source,
+        chapter_url: str,
+        scroll_fraction: float = 0.0,
+        saved_entry: LibraryEntry | None = None,
+        novel_url: str | None = None,
+    ) -> None:
+        """Read from chapter_url on.
+
+        With saved_entry set, a missing first chapter offers to find the novel again.
+        novel_url is the novel that the reading started from, for chapter pages without
+        a novel link. Without both, the chapter is saved as its own library entry.
+        """
         url: str | None = chapter_url
+        known_novel_url = novel_url
         attributes = apply_reader_theme(self.settings.theme)
         try:
             while url is not None:
@@ -968,9 +981,13 @@ class App:
                         return
                     case Chapter() as chapter:
                         pass
-                novel_url = chapter.novel_url or chapter.url
-                novel_title = self.novel_title(source, novel_url, fallback=chapter.title)
-                outcome = self.show_chapter(source, chapter, novel_url, novel_title, scroll_fraction, attributes)
+                known_novel_url = chapter.novel_url or known_novel_url
+                match known_novel_url:
+                    case str(chapter_novel_url):
+                        novel_title = self.novel_title(source, chapter_novel_url, fallback=chapter.title)
+                    case None:
+                        chapter_novel_url, novel_title = chapter.url, chapter.title
+                outcome = self.show_chapter(source, chapter, chapter_novel_url, novel_title, scroll_fraction, attributes)
                 scroll_fraction = 0.0
                 match outcome:
                     case ReaderOutcome.NEXT_CHAPTER:

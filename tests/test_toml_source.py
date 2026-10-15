@@ -118,6 +118,16 @@ IMAGE_CHAPTER_PAGES = {
 }
 
 
+class NovelLinkTests(unittest.TestCase):
+    def test_first_link_to_a_novel_page_counts(self) -> None:
+        content = FIXTURE.read_text(encoding="utf-8").replace('novel_link = "a.back"', 'novel_link = "ol.breadcrumb a"')
+        source = TomlSource(parse_source_definition(content), FIXTURE)
+        page = """<ol class="breadcrumb"><li><a href="/">Home</a></li><li><a href="/novel/first/">First</a></li></ol>
+            <h1 class="chapter-title">Chapter 1</h1><div class="text"><p>Text.</p></div>"""
+        chapter = source.parse_chapter("https://example.org/novel/first/chapter-1", parse_html(page))
+        self.assertEqual(chapter.novel_url, "https://example.org/novel/first/")
+
+
 class ChapterImageTests(unittest.TestCase):
     def test_images_are_counted(self) -> None:
         source = TomlSource(parse_source_definition(FIXTURE.read_text(encoding="utf-8")), FIXTURE)

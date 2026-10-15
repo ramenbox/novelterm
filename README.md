@@ -160,7 +160,7 @@ method = "get"                         # optional: "get" (default) or "post"
 [chapter]
 title = "h1.chapter-title"
 content = "div.chapter-text"           # chapter body
-novel_link = "a.back-to-novel"         # optional; links the chapter to its novel in the library
+novel_link = "a.back-to-novel"         # optional; the first match that matches novel_pattern counts
 previous = "a.previous-chapter"        # optional
 next = "a.next-chapter"                # optional
 

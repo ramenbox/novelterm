@@ -158,12 +158,11 @@ class TomlSource:
 
     def parse_chapter(self, url: str, document: Element) -> Chapter:
         rules = self.definition.chapter
-        novel_link = first(rules.novel_link, document)
         content = rules.content.select_first(document)
         return Chapter(
             title=text_of(rules.title.select_first(document)) or url,
             url=url,
-            novel_url=absolute_link(url, novel_link) if novel_link else None,
+            novel_url=self.novel_link_url(url, rules.novel_link.select(document) if rules.novel_link else []),
             paragraphs=paragraphs_of(content),
             previous_url=self.chapter_link_url(url, first(rules.previous, document)),
             next_url=self.chapter_link_url(url, first(rules.next, document)),
@@ -177,6 +176,11 @@ class TomlSource:
             if url and url not in chapters and self.link_kind(url) == LinkKind.CHAPTER:
                 chapters[url] = ChapterLink(title=clean_text(link.text()) or url, url=url)
         return list(chapters.values())
+
+    def novel_link_url(self, page_url: str, links: list[Element]) -> str | None:
+        """The first link that leads to a novel page, for selectors such as breadcrumbs that also match other links."""
+        urls = (absolute_link(page_url, link) for link in links)
+        return next((url for url in urls if url and self.link_kind(url) == LinkKind.NOVEL), None)
 
     def chapter_link_url(self, page_url: str, link: Element | None) -> str | None:
         url = absolute_link(page_url, link) if link else None
