@@ -45,9 +45,28 @@ class NovelListRules:
 
 
 @dataclass(frozen=True)
+class LabeledField:
+    """A value found by its label, for pages that show rows such as "Status: Ongoing".
+
+    novelterm checks each element that matches item. The first item whose label
+    text equals label_text gives the value. The comparison ignores case, extra
+    spaces and a trailing ":".
+    """
+
+    item: Selector
+    label: Selector
+    label_text: str
+    value: Selector
+
+
+type FieldRule = Selector | LabeledField
+"""A selector for the element, or a value found by its label."""
+
+
+@dataclass(frozen=True)
 class NovelRules:
     title: Selector
-    status: Selector | None
+    status: FieldRule | None
     description: Selector | None
     description_text: DescriptionText
     chapters: Selector
@@ -122,6 +141,24 @@ class TableReader:
     def optional_selector(self, key: str) -> Selector | None:
         text = self.optional_text(key)
         return self.as_selector(key, text) if text is not None else None
+
+    def optional_field(self, key: str) -> FieldRule | None:
+        """A field given as a selector text, or as a table with item, label, label_text and value."""
+        match self.table.get(key):
+            case None:
+                return None
+            case str():
+                return self.required_selector(key)
+            case dict():
+                table = self.subtable(key)
+                return LabeledField(
+                    item=table.required_selector("item"),
+                    label=table.required_selector("label"),
+                    label_text=table.required_text("label_text"),
+                    value=table.required_selector("value"),
+                )
+            case _:
+                raise SourceFileError(f"'{self.key_name(key)}' must be a selector text or a table")
 
     def as_selector(self, key: str, text: str) -> Selector:
         try:
@@ -215,7 +252,7 @@ def parse_source_definition(content: str) -> SourceDefinition:
         ),
         novel=NovelRules(
             title=novel.required_selector("title"),
-            status=novel.optional_selector("status"),
+            status=novel.optional_field("status"),
             description=novel.optional_selector("description"),
             description_text=novel.choice("description_text", DescriptionText, DescriptionText.ALL),
             chapters=novel.required_selector("chapters"),

@@ -64,6 +64,19 @@ class CheckSourceTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn('"Second Novel", "Third Novel"', output)
 
+    def test_labeled_status_reports_the_label(self) -> None:
+        from test_toml_source import LABELED_PAGE, LABELED_STATUS
+
+        source_file = self.temporary_directory / "labeled.toml"
+        source_file.write_text(FIXTURE.read_text(encoding="utf-8").replace('status = "p.status"', LABELED_STATUS), encoding="utf-8")
+        html_file = self.temporary_directory / "labeled.html"
+        html_file.write_text(LABELED_PAGE, encoding="utf-8")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
+            check_source_command([str(source_file), "https://example.org/novel/first", "--html", str(html_file)])
+        self.assertIn('item "div.row" -> 2 matches, label "status" found', output.getvalue())
+        self.assertRegex(output.getvalue(), r"status\s+OnGoing\n")
+
     def test_search(self) -> None:
         output, exit_code = self.run_check("", PAGES["https://example.org/search?q=first+novel"], "--search", "first novel")
         self.assertEqual(exit_code, 0)

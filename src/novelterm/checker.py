@@ -13,9 +13,9 @@ from novelterm.css_selectors import Selector
 from novelterm.html_tree import Element, fetch_document, parse_html
 from novelterm.models import LinkKind, Listing
 from novelterm.network import FetchError
-from novelterm.sources.definition import SourceFileError
+from novelterm.sources.definition import FieldRule, LabeledField, SourceFileError
 from novelterm.sources.registry import load_source_file
-from novelterm.sources.toml_source import TomlSource
+from novelterm.sources.toml_source import TomlSource, label_key
 
 TITLE_SAMPLE_SIZE = 3
 
@@ -30,7 +30,7 @@ class PageKind(Enum):
 @dataclass(frozen=True)
 class SelectorRule:
     key: str
-    selector: Selector | None
+    selector: FieldRule | None
     required: bool
 
 
@@ -99,9 +99,24 @@ def check_selectors(rules: list[SelectorRule], document: Element, report: Report
                 report.add(rule.key, "not set")
             case Selector() as selector:
                 count = len(selector.select(document))
-                report.add(rule.key, f'"{selector.text}" -> {count} {"match" if count == 1 else "matches"}')
+                report.add(rule.key, f'"{selector.text}" -> {match_label(count)}')
                 if count == 0 and rule.required:
                     report.problems.append(f"{rule.key}: no element matches \"{selector.text}\"")
+            case LabeledField() as field:
+                items = field.item.select(document)
+                labels = [label for item in items if (label := field.label.select_first(item)) is not None]
+                found = any(label_key(label.text()) == label_key(field.label_text) for label in labels)
+                report.add(
+                    rule.key,
+                    f'item "{field.item.text}" -> {match_label(len(items))}, '
+                    f'label "{field.label_text}" {"found" if found else "not found"}',
+                )
+                if not found and rule.required:
+                    report.problems.append(f'{rule.key}: no item has the label "{field.label_text}"')
+
+
+def match_label(count: int) -> str:
+    return f"{count} {'match' if count == 1 else 'matches'}"
 
 
 def sample_titles(titles: list[str]) -> str:

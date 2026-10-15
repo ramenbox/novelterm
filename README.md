@@ -146,7 +146,7 @@ next_page = "a.next-page"              # optional; link to the next page of the 
 
 [novel]
 title = "h1.novel-title"
-status = "div.status"                  # optional; a leading "Status:" is removed
+status = "div.status"                  # optional; a leading "Status:" is removed. Or a labeled field, see below.
 description = "div.summary"            # optional
 description_text = "all"               # optional: "all" (default) or "own" (text outside child elements)
 chapters = "ul.chapter-list a"         # only links that match chapter_pattern count
@@ -165,6 +165,19 @@ url = "https://example.org/?s={query}" # {query} is replaced by the URL-encoded 
 results = "div.search-results a"       # links to novel pages; only links that match novel_pattern count
 next_page = "a.next-page"              # optional; link to the next page of results
 ```
+
+Labeled field: some pages show rows of label and value, such as "Release: 2025" and
+"Status: Ongoing", with the same markup for each row. A labeled field picks the row
+by its label text:
+
+```
+status = { item = "div.info-row", label = "span.label", label_text = "Status", value = "span.value" }
+```
+
+novelterm checks each element that matches `item`. The first item whose `label`
+text equals `label_text` gives the text of its `value` element. The comparison
+ignores case, extra spaces and a trailing `:`. When no label matches, the status
+is empty.
 
 `next_page`: a next page link to another host, or to a page that is already loaded,
 ends the list.

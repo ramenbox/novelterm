@@ -6,7 +6,14 @@ from urllib.parse import quote_plus, urljoin, urlparse
 from novelterm.css_selectors import Selector
 from novelterm.html_tree import Element, clean_text, fetch_document
 from novelterm.models import Chapter, ChapterLink, LinkKind, Listing, NovelDetails, NovelListPage, NovelSummary
-from novelterm.sources.definition import SEARCH_QUERY_PLACEHOLDER, ChapterOrder, DescriptionText, SourceDefinition
+from novelterm.sources.definition import (
+    SEARCH_QUERY_PLACEHOLDER,
+    ChapterOrder,
+    DescriptionText,
+    FieldRule,
+    LabeledField,
+    SourceDefinition,
+)
 
 CONTENT_TAGS = frozenset({"p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "li"})
 STATUS_LABEL_PREFIX = "status:"
@@ -96,7 +103,7 @@ class TomlSource:
 
     def parse_novel(self, url: str, document: Element) -> NovelDetails:
         rules = self.definition.novel
-        status = text_of(first(rules.status, document))
+        status = field_text(rules.status, document)
         if status.lower().startswith(STATUS_LABEL_PREFIX):
             status = status[len(STATUS_LABEL_PREFIX) :].strip()
         description_element = first(rules.description, document)
@@ -152,6 +159,30 @@ class TomlSource:
 
 def first(selector: Selector | None, document: Element) -> Element | None:
     return selector.select_first(document) if selector else None
+
+
+def field_text(rule: FieldRule | None, document: Element) -> str:
+    match rule:
+        case None:
+            return ""
+        case Selector():
+            return text_of(rule.select_first(document))
+        case LabeledField():
+            return text_of(labeled_value(rule, document))
+
+
+def labeled_value(rule: LabeledField, document: Element) -> Element | None:
+    """The value element of the first item whose label matches. None when no label matches."""
+    wanted = label_key(rule.label_text)
+    for item in rule.item.select(document):
+        label = rule.label.select_first(item)
+        if label is not None and label_key(label.text()) == wanted:
+            return rule.value.select_first(item)
+    return None
+
+
+def label_key(text: str) -> str:
+    return clean_text(text).replace("\n", " ").rstrip(":").strip().casefold()
 
 
 def text_of(element: Element | None) -> str:

@@ -4,7 +4,7 @@ from unittest import mock
 
 from novelterm.html_tree import parse_html
 from novelterm.models import LinkKind, Listing
-from novelterm.sources.definition import parse_source_definition
+from novelterm.sources.definition import SourceFileError, parse_source_definition
 from novelterm.sources.toml_source import TomlSource
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "sources" / "example-site.toml"
@@ -105,6 +105,34 @@ class TomlSourceTests(unittest.TestCase):
         self.assertEqual(chapter.paragraphs, ["Line one", "Line two"])
         self.assertIsNone(chapter.next_url)
         self.assertIsNone(chapter.novel_url)
+
+
+LABELED_STATUS = 'status = { item = "div.row", label = "span.label", label_text = "status", value = "span.value" }'
+
+LABELED_PAGE = """
+    <h1 class="title">Labeled</h1>
+    <div class="row"><span class="label">Release</span><span class="value">2025</span></div>
+    <div class="row"><span class="label"> STATUS: </span><span class="value">OnGoing</span></div>"""
+
+
+class LabeledFieldTests(unittest.TestCase):
+    def source_with_status(self, status_line: str) -> TomlSource:
+        content = FIXTURE.read_text(encoding="utf-8").replace('status = "p.status"', status_line)
+        return TomlSource(parse_source_definition(content), FIXTURE)
+
+    def test_value_of_the_row_with_the_label(self) -> None:
+        source = self.source_with_status(LABELED_STATUS)
+        novel = source.parse_novel("https://example.org/novel/first", parse_html(LABELED_PAGE))
+        self.assertEqual(novel.status, "OnGoing")
+
+    def test_no_matching_label_gives_no_status(self) -> None:
+        source = self.source_with_status(LABELED_STATUS.replace('"status"', '"Author"'))
+        novel = source.parse_novel("https://example.org/novel/first", parse_html(LABELED_PAGE))
+        self.assertEqual(novel.status, "")
+
+    def test_missing_key_in_the_table_is_an_error(self) -> None:
+        with self.assertRaisesRegex(SourceFileError, "novel.status.value"):
+            self.source_with_status(LABELED_STATUS.replace(', value = "span.value"', ""))
 
 
 if __name__ == "__main__":
