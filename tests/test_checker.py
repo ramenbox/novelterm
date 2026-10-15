@@ -51,6 +51,19 @@ class CheckSourceTests(unittest.TestCase):
         self.assertIn("(novel list)", output)
         self.assertIn('"First Novel", "Second Novel"', output)
 
+    def test_novel_list_reports_the_next_page(self) -> None:
+        output, exit_code = self.run_check("", PAGES["https://example.org/"])
+        self.assertEqual(exit_code, 0)
+        self.assertRegex(output, r"next page\s+https://example.org/\?page=2\n")
+
+    def test_later_novel_list_page_needs_the_option(self) -> None:
+        url = "https://example.org/?page=2"
+        _, exit_code = self.run_check(url, PAGES[url])
+        self.assertEqual(exit_code, 1)
+        output, exit_code = self.run_check(url, PAGES[url], "--novel-list")
+        self.assertEqual(exit_code, 0)
+        self.assertIn('"Second Novel", "Third Novel"', output)
+
     def test_search(self) -> None:
         output, exit_code = self.run_check("", PAGES["https://example.org/search?q=first+novel"], "--search", "first novel")
         self.assertEqual(exit_code, 0)

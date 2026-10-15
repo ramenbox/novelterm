@@ -5,7 +5,7 @@ from urllib.parse import quote_plus, urljoin, urlparse
 
 from novelterm.css_selectors import Selector
 from novelterm.html_tree import Element, clean_text, fetch_document
-from novelterm.models import Chapter, ChapterLink, LinkKind, NovelDetails, NovelSummary
+from novelterm.models import Chapter, ChapterLink, LinkKind, Listing, NovelDetails, NovelListPage, NovelSummary
 from novelterm.sources.definition import SEARCH_QUERY_PLACEHOLDER, ChapterOrder, DescriptionText, SourceDefinition
 
 CONTENT_TAGS = frozenset({"p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "li"})
@@ -40,17 +40,14 @@ class TomlSource:
     def supports_search(self) -> bool:
         return self.definition.search is not None
 
-    def list_novels(self) -> list[NovelSummary]:
-        page_url = self.definition.novel_list.page
-        return self.parse_novel_list(page_url, fetch_document(page_url))
+    def list_novels(self) -> NovelListPage:
+        return self.next_novel_page(Listing.NOVEL_LIST, self.definition.novel_list.page)
 
-    def search(self, query: str) -> list[NovelSummary]:
-        match self.definition.search:
-            case None:
-                return []
-            case search_rules:
-                page_url = self.search_url(query)
-                return self.novel_links(page_url, search_rules.results.select(fetch_document(page_url)))
+    def search(self, query: str) -> NovelListPage:
+        return self.next_novel_page(Listing.SEARCH, self.search_url(query))
+
+    def next_novel_page(self, listing: Listing, page_url: str) -> NovelListPage:
+        return self.parse_novel_list_page(listing, page_url, fetch_document(page_url))
 
     def search_url(self, query: str) -> str:
         match self.definition.search:
@@ -65,8 +62,28 @@ class TomlSource:
     def get_chapter(self, url: str) -> Chapter:
         return self.parse_chapter(url, fetch_document(url))
 
-    def parse_novel_list(self, page_url: str, document: Element) -> list[NovelSummary]:
-        return self.novel_links(page_url, self.definition.novel_list.links.select(document))
+    def listing_selectors(self, listing: Listing) -> tuple[Selector, Selector | None]:
+        """The selectors for (novel links, next page link) of a listing."""
+        match (listing, self.definition.search):
+            case (Listing.NOVEL_LIST, _):
+                return self.definition.novel_list.links, self.definition.novel_list.next_page
+            case (Listing.SEARCH, None):
+                raise ValueError(f"source '{self.identifier}' has no [search] table")
+            case (Listing.SEARCH, search_rules):
+                return search_rules.results, search_rules.next_page
+
+    def parse_novel_list_page(self, listing: Listing, page_url: str, document: Element) -> NovelListPage:
+        links, next_page = self.listing_selectors(listing)
+        return NovelListPage(
+            url=page_url,
+            novels=self.novel_links(page_url, links.select(document)),
+            next_page_url=self.next_page_url(page_url, first(next_page, document)),
+        )
+
+    def next_page_url(self, page_url: str, link: Element | None) -> str | None:
+        """The URL of a next page link. None when it leads to another site or to the same page."""
+        url = absolute_link(page_url, link) if link else None
+        return url if url and url != page_url and self.handles(url) else None
 
     def novel_links(self, page_url: str, links: list[Element]) -> list[NovelSummary]:
         novels: dict[str, NovelSummary] = {}

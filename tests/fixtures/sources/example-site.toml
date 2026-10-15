@@ -13,6 +13,7 @@ chapter_pattern = "^/novel/[^/]+/chapter-"
 [novel_list]
 page = "https://example.org/"
 links = "div.novels a"
+next_page = "a.next-page"
 
 [novel]
 title = "h1.title"
@@ -33,3 +34,4 @@ next = "div.navigation > a.next"
 [search]
 url = "https://example.org/search?q={query}"
 results = "ul.results a"
+next_page = "a.next-page"

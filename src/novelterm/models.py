@@ -8,10 +8,27 @@ class LinkKind(Enum):
     UNKNOWN = auto()
 
 
+class Listing(Enum):
+    """A list of novels on a site."""
+
+    NOVEL_LIST = auto()
+    SEARCH = auto()
+
+
 @dataclass(frozen=True)
 class NovelSummary:
     title: str
     url: str
+
+
+@dataclass(frozen=True)
+class NovelListPage:
+    """One page of a novel list or of search results."""
+
+    url: str
+    novels: list[NovelSummary]
+    next_page_url: str | None
+    """The next page of the same list. None on the last page."""
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,7 @@ from pathlib import Path
 from novelterm.checker import check_source_command
 from novelterm.downloads import DownloadStore
 from novelterm.library import Library, LibraryEntry, LibrarySort, url_with_same_slug
-from novelterm.models import Chapter, ChapterLink, LinkKind, NovelDetails, NovelSummary
+from novelterm.models import Chapter, ChapterLink, LinkKind, Listing, NovelDetails, NovelListPage, NovelSummary
 from novelterm.network import MINIMUM_SECONDS_BETWEEN_REQUESTS, FetchError, FetchFailure
 from novelterm.paths import LOCAL_SOURCES_DIRECTORY, SETTINGS_FILE
 from novelterm.repositories import build_index, EntryStatus, IndexEntry, RepositoryError, RepositoryIndex, RepositoryStore, SavedRepository, fetch_index
@@ -102,6 +102,39 @@ class SearchSource:
     pass
 
 
+class LoadMore:
+    pass
+
+
+@dataclass
+class LoadedListing:
+    """The novels of a list or of search results loaded so far."""
+
+    listing: Listing
+    novels: list[NovelSummary]
+    next_page_url: str | None
+    loaded_page_count: int
+    loaded_page_urls: set[str]
+
+    @classmethod
+    def first_page(cls, listing: Listing, page: NovelListPage) -> "LoadedListing":
+        loaded = cls(listing=listing, novels=[], next_page_url=None, loaded_page_count=0, loaded_page_urls={page.url})
+        loaded.add_page(page)
+        return loaded
+
+    def add_page(self, page: NovelListPage) -> None:
+        """Add the novels of the next page. A next page that was already loaded ends the list."""
+        known_urls = {novel.url for novel in self.novels}
+        self.novels += [novel for novel in page.novels if novel.url not in known_urls]
+        self.loaded_page_count += 1
+        match page.next_page_url:
+            case str(url) if url not in self.loaded_page_urls:
+                self.next_page_url = url
+                self.loaded_page_urls.add(url)
+            case _:
+                self.next_page_url = None
+
+
 class RecoveryChoice(Enum):
     FIND_AGAIN = auto()
     BACK = auto()
@@ -175,7 +208,7 @@ class App:
         self.downloads = DownloadStore()
         self.catalog = load_catalog()
         self.novel_cache: dict[str, NovelDetails] = {}
-        self.novel_list_cache: dict[str, list[NovelSummary]] = {}
+        self.novel_list_cache: dict[str, LoadedListing] = {}
         self.chapter_cache: dict[str, Chapter] = {}
         self.settings_problem: str | None = None
         try:
@@ -408,18 +441,15 @@ class App:
                     return
 
     def site_novels_screen(self, source: Source) -> None:
-        novels = self.load_novel_list(source)
-        if novels is None:
+        loaded = self.load_novel_list(source)
+        if loaded is None:
             return
         selected_index = 0
         while True:
             items: list[MenuItem] = []
             if source.supports_search:
                 items.append(MenuItem(f"Search {source.name}", SearchSource(), hint="type a title", style=ItemStyle.ACCENT))
-            items += [
-                MenuItem(novel.title, novel.url, hint="* in library" if self.is_saved(novel.url) else "")
-                for novel in novels
-            ]
+            items += self.listing_items(loaded)
             result = run_menu(
                 self.screen,
                 breadcrumb=source.name,
@@ -433,6 +463,9 @@ class App:
                 case Selected(SearchSource()):
                     selected_index = 0
                     self.search_screen(source)
+                case Selected(LoadMore()):
+                    selected_index = len(items) - 1
+                    self.load_more(source, loaded)
                 case Selected(str(novel_url)):
                     selected_index = [item.value for item in items].index(novel_url)
                     self.novel_screen(source, novel_url)
@@ -445,30 +478,32 @@ class App:
             return
         show_loading(self.screen, f"Searching {source.name}...")
         try:
-            results = source.search(query)
+            results = LoadedListing.first_page(Listing.SEARCH, source.search(query))
         except FetchError as error:
             show_message(self.screen, "Could not search the site", [error.url, error.explanation()], is_error=True)
             return
-        if not results:
+        if not results.novels:
             show_message(self.screen, "No results", [f'{source.name} has no novels for "{query}".'])
             return
         selected_index = 0
         while True:
+            items = self.listing_items(results)
+            more = " so far" if results.next_page_url else ""
             result = run_menu(
                 self.screen,
                 breadcrumb=f"{source.name} > Search",
                 title=f'Results for "{query}"',
-                intro_lines=[count_label(len(results), "novel")],
-                items=[
-                    MenuItem(novel.title, novel.url, hint="* in library" if self.is_saved(novel.url) else "")
-                    for novel in results
-                ],
+                intro_lines=[count_label(len(results.novels), "novel") + more],
+                items=items,
                 initial_index=selected_index,
                 searchable=True,
             )
             match result:
+                case Selected(LoadMore()):
+                    selected_index = len(items) - 1
+                    self.load_more(source, results)
                 case Selected(str(novel_url)):
-                    selected_index = [novel.url for novel in results].index(novel_url)
+                    selected_index = [item.value for item in items].index(novel_url)
                     self.novel_screen(source, novel_url)
                 case _:
                     return
@@ -1070,18 +1105,43 @@ class App:
             case NovelDetails() as details:
                 return details
 
-    def load_novel_list(self, source: Source) -> list[NovelSummary] | None:
-        novels = self.novel_list_cache.get(source.identifier)
-        if novels is not None:
-            return novels
+    def load_novel_list(self, source: Source) -> LoadedListing | None:
+        """The first page of the novel list, or the pages loaded before."""
+        loaded = self.novel_list_cache.get(source.identifier)
+        if loaded is not None:
+            return loaded
         show_loading(self.screen, f"Loading novels from {source.name}...")
         try:
-            novels = source.list_novels()
+            page = source.list_novels()
         except FetchError as error:
             show_message(self.screen, "Could not load the site", [error.url, error.explanation()], is_error=True)
             return None
-        self.novel_list_cache[source.identifier] = novels
-        return novels
+        loaded = LoadedListing.first_page(Listing.NOVEL_LIST, page)
+        self.novel_list_cache[source.identifier] = loaded
+        return loaded
+
+    def load_more(self, source: Source, loaded: LoadedListing) -> None:
+        """Load the next page of a list into loaded."""
+        match loaded.next_page_url:
+            case None:
+                return
+            case str(page_url):
+                pass
+        show_loading(self.screen, f"Loading page {loaded.loaded_page_count + 1}...")
+        try:
+            page = source.next_novel_page(loaded.listing, page_url)
+        except FetchError as error:
+            show_message(self.screen, "Could not load the next page", [error.url, error.explanation()], is_error=True)
+            return
+        loaded.add_page(page)
+
+    def listing_items(self, loaded: LoadedListing) -> list[MenuItem]:
+        """Menu items for the loaded novels, with a Load more item when the list has a next page."""
+        items = [
+            MenuItem(novel.title, novel.url, hint="* in library" if self.is_saved(novel.url) else "")
+            for novel in loaded.novels
+        ]
+        return items + load_more_items(loaded)
 
     # Moved novels
 
@@ -1134,33 +1194,44 @@ class App:
         self.novel_screen(source, details.url)
 
     def pick_moved_novel(self, source: Source, entry: LibraryEntry) -> str | None:
-        novels = self.load_novel_list(source)
-        if novels is None:
+        loaded = self.load_novel_list(source)
+        if loaded is None:
             return None
         saved_title = normalized_title(entry.novel_title)
-        same_title = [novel for novel in novels if normalized_title(novel.title) == saved_title]
-        others = [novel for novel in novels if normalized_title(novel.title) != saved_title]
-        items = [MenuItem(novel.title, novel.url, hint="same title", style=ItemStyle.ACCENT) for novel in same_title]
-        items += [MenuItem(novel.title, novel.url) for novel in others]
-        if not items:
-            show_message(self.screen, "No novels found", [f"The novel list of {source.name} is empty."], is_error=True)
-            return None
-        result = run_menu(
-            self.screen,
-            breadcrumb=entry.novel_title,
-            title="Pick the novel",
-            intro_lines=[
-                f"Saved title: {entry.novel_title}",
-                "Novels with the same title are at the top." if same_title else "No novel has the same title. Pick it from the list.",
-            ],
-            items=items,
-            searchable=True,
-        )
-        match result:
-            case Selected(str(novel_url)):
-                return novel_url
-            case _:
+        selected_index = 0
+        while True:
+            same_title = [novel for novel in loaded.novels if normalized_title(novel.title) == saved_title]
+            others = [novel for novel in loaded.novels if normalized_title(novel.title) != saved_title]
+            items = [MenuItem(novel.title, novel.url, hint="same title", style=ItemStyle.ACCENT) for novel in same_title]
+            items += [MenuItem(novel.title, novel.url) for novel in others]
+            items += load_more_items(loaded)
+            if not items:
+                show_message(self.screen, "No novels found", [f"The novel list of {source.name} is empty."], is_error=True)
                 return None
+            match (same_title, loaded.next_page_url):
+                case ([_, *_], _):
+                    hint = "Novels with the same title are at the top."
+                case ([], str()):
+                    hint = "No loaded novel has the same title. Select Load more novels at the end of the list, or pick it."
+                case ([], None):
+                    hint = "No novel has the same title. Pick it from the list."
+            result = run_menu(
+                self.screen,
+                breadcrumb=entry.novel_title,
+                title="Pick the novel",
+                intro_lines=[f"Saved title: {entry.novel_title}", hint],
+                items=items,
+                initial_index=selected_index,
+                searchable=True,
+            )
+            match result:
+                case Selected(LoadMore()):
+                    selected_index = len(items) - 1
+                    self.load_more(source, loaded)
+                case Selected(str(novel_url)):
+                    return novel_url
+                case _:
+                    return None
 
     def pick_moved_chapter(self, details: NovelDetails, entry: LibraryEntry) -> ChapterLink | None:
         """Ask for the chapter that matches the saved chapter. None when nothing is saved or the user goes back."""
@@ -1224,6 +1295,15 @@ def count_label(count: int, noun: str) -> str:
             return f"{count} {text[:-1]}ies"
         case _:
             return f"{count} {noun}s"
+
+
+def load_more_items(loaded: LoadedListing) -> list[MenuItem]:
+    """A Load more item when the list has a next page, else nothing."""
+    match loaded.next_page_url:
+        case str():
+            return [MenuItem("Load more novels", LoadMore(), hint=f"page {loaded.loaded_page_count + 1}", style=ItemStyle.ACCENT)]
+        case None:
+            return []
 
 
 def normalized_title(title: str) -> str:

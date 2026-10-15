@@ -11,7 +11,7 @@ from pathlib import Path
 
 from novelterm.css_selectors import Selector
 from novelterm.html_tree import Element, fetch_document, parse_html
-from novelterm.models import LinkKind
+from novelterm.models import LinkKind, Listing
 from novelterm.network import FetchError
 from novelterm.sources.definition import SourceFileError
 from novelterm.sources.registry import load_source_file
@@ -43,11 +43,11 @@ class Report:
         self.lines.append(f"  {label:<22} {value}")
 
 
-def page_kind(source: TomlSource, url: str, search_query: str | None) -> PageKind | None:
+def page_kind(source: TomlSource, url: str, search_query: str | None, is_novel_list: bool) -> PageKind | None:
     match (search_query, source.link_kind(url)):
         case (str(), _):
             return PageKind.SEARCH
-        case (None, _) if url == source.definition.novel_list.page:
+        case (None, _) if is_novel_list or url == source.definition.novel_list.page:
             return PageKind.NOVEL_LIST
         case (None, LinkKind.NOVEL):
             return PageKind.NOVEL
@@ -61,9 +61,16 @@ def selector_rules(source: TomlSource, kind: PageKind) -> list[SelectorRule]:
     definition = source.definition
     match kind:
         case PageKind.NOVEL_LIST:
-            return [SelectorRule("novel_list.links", definition.novel_list.links, True)]
+            return [
+                SelectorRule("novel_list.links", definition.novel_list.links, True),
+                SelectorRule("novel_list.next_page", definition.novel_list.next_page, False),
+            ]
         case PageKind.SEARCH:
-            return [SelectorRule("search.results", definition.search.results if definition.search else None, True)]
+            search = definition.search
+            return [
+                SelectorRule("search.results", search.results if search else None, True),
+                SelectorRule("search.next_page", search.next_page if search else None, False),
+            ]
         case PageKind.NOVEL:
             rules = definition.novel
             return [
@@ -103,11 +110,12 @@ def sample_titles(titles: list[str]) -> str:
     return ", ".join(f'"{title}"' for title in sample) + more
 
 
-def check_novel_links(source: TomlSource, url: str, links: list[Element], report: Report) -> None:
-    novels = source.novel_links(url, links)
-    report.add("novels", len(novels))
-    report.add("titles", sample_titles([novel.title for novel in novels]) or "-")
-    if not novels:
+def check_novel_list_page(source: TomlSource, listing: Listing, url: str, document: Element, report: Report) -> None:
+    page = source.parse_novel_list_page(listing, url, document)
+    report.add("novels", len(page.novels))
+    report.add("titles", sample_titles([novel.title for novel in page.novels]) or "-")
+    report.add("next page", page.next_page_url or "-")
+    if not page.novels:
         report.problems.append("no links that match urls.novel_pattern")
 
 
@@ -115,11 +123,11 @@ def check_results(source: TomlSource, kind: PageKind, url: str, document: Elemen
     report.lines.append("Result:")
     match (kind, source.definition.search):
         case (PageKind.NOVEL_LIST, _):
-            check_novel_links(source, url, source.definition.novel_list.links.select(document), report)
+            check_novel_list_page(source, Listing.NOVEL_LIST, url, document, report)
         case (PageKind.SEARCH, None):
             report.problems.append("the source file has no [search] table")
-        case (PageKind.SEARCH, search_rules):
-            check_novel_links(source, url, search_rules.results.select(document), report)
+        case (PageKind.SEARCH, _):
+            check_novel_list_page(source, Listing.SEARCH, url, document, report)
         case (PageKind.NOVEL, _):
             novel = source.parse_novel(url, document)
             report.add("title", novel.title)
@@ -178,6 +186,7 @@ def check_source_command(arguments: list[str]) -> None:
     parser.add_argument("file", type=Path, help="the .toml source file")
     parser.add_argument("url", nargs="?", help="a novel page or chapter page URL")
     parser.add_argument("--search", metavar="TEXT", help="check the [search] table with this search text")
+    parser.add_argument("--novel-list", action="store_true", help="URL is a later page of the novel list")
     parser.add_argument("--html", type=Path, metavar="FILE", help="read the page from a saved HTML file instead of the site")
     options = parser.parse_args(arguments)
 
@@ -191,9 +200,12 @@ def check_source_command(arguments: list[str]) -> None:
     given_url: str | None = options.url
     html_file: Path | None = options.html
     url = page_url(source, search_query, given_url)
-    kind = page_kind(source, url, search_query)
+    kind = page_kind(source, url, search_query, options.novel_list)
     if kind is None:
-        sys.exit(f"error: {url} matches neither urls.novel_pattern nor urls.chapter_pattern, and it is not the novel list page")
+        sys.exit(
+            f"error: {url} matches neither urls.novel_pattern nor urls.chapter_pattern, and it is not the novel list page. "
+            "Add --novel-list for a later page of the novel list."
+        )
     print(f"Page: {url} ({kind.name.lower().replace('_', ' ')})")
     document = load_page(url, html_file)
 

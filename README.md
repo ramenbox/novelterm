@@ -38,6 +38,8 @@ Home screens:
 - **Library**: novels you started or added, with the number of unread chapters.
 - **Check for updates**: loads the novel page of each library novel and lists the novels with new chapters.
 - **Browse sources**: novel list of each installed source, and search when the source supports it.
+  When the list or the search results have more pages, **Load more novels** at the end of
+  the list loads the next page. novelterm loads a page only when you select this item.
 - **Open a link**: opens a novel or chapter URL with the source that handles its host.
 - **Manage sources**: installed sources, repositories, reload, problems.
 - **Settings**: reader line width, theme, paragraph spacing, library sort.
@@ -140,6 +142,7 @@ chapter_pattern = "/novel/[^/]+/chapter-"
 [novel_list]
 page = "https://example.org/novels/"   # page that lists the novels
 links = "div.novel-list a"             # links to novel pages; only links that match novel_pattern count
+next_page = "a.next-page"              # optional; link to the next page of the list
 
 [novel]
 title = "h1.novel-title"
@@ -160,7 +163,11 @@ next = "a.next-chapter"                # optional
 [search]                               # optional table
 url = "https://example.org/?s={query}" # {query} is replaced by the URL-encoded search text
 results = "div.search-results a"       # links to novel pages; only links that match novel_pattern count
+next_page = "a.next-page"              # optional; link to the next page of results
 ```
+
+`next_page`: a next page link to another host, or to a page that is already loaded,
+ends the list.
 
 Selectors support a subset of CSS: `tag`, `.class`, `#id`, combined forms such as
 `div.a.b`, descendant (`div a`) and child (`ul > li > a`). The first match is used
@@ -177,6 +184,7 @@ novelterm check-source example-site.toml                       # novel list page
 novelterm check-source example-site.toml https://example.org/novel/first
 novelterm check-source example-site.toml https://example.org/novel/first/chapter-1
 novelterm check-source example-site.toml --search "first"      # [search] table
+novelterm check-source example-site.toml https://example.org/novels/page/2 --novel-list
 novelterm check-source example-site.toml URL --html saved.html # use a saved page
 ```
 

@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest import mock
 
 from novelterm.html_tree import parse_html
-from novelterm.models import LinkKind
+from novelterm.models import LinkKind, Listing
 from novelterm.sources.definition import parse_source_definition
 from novelterm.sources.toml_source import TomlSource
 
@@ -16,7 +16,11 @@ PAGES = {
           <a href="/novel/first">First Novel</a>
           <a href="/novel/second/">Second Novel</a>
           <a href="/about">About</a>
-        </div>""",
+        </div>
+        <a class="next-page" href="/?page=2">Next</a>""",
+    "https://example.org/?page=2": """
+        <div class="novels"><a href="/novel/second/">Second Novel</a><a href="/novel/third">Third Novel</a></div>
+        <a class="next-page" href="/?page=2">Next</a>""",
     "https://example.org/novel/first": """
         <h1 class="title">First Novel</h1>
         <p class="status">Status: Ongoing</p>
@@ -63,15 +67,22 @@ class TomlSourceTests(unittest.TestCase):
         self.assertEqual(self.source.link_kind("https://other.org/novel/first"), LinkKind.UNKNOWN)
 
     def test_list_novels(self) -> None:
-        novels = self.source.list_novels()
-        self.assertEqual([novel.title for novel in novels], ["First Novel", "Second Novel"])
-        self.assertEqual(novels[0].url, "https://example.org/novel/first")
+        page = self.source.list_novels()
+        self.assertEqual([novel.title for novel in page.novels], ["First Novel", "Second Novel"])
+        self.assertEqual(page.novels[0].url, "https://example.org/novel/first")
+        self.assertEqual(page.next_page_url, "https://example.org/?page=2")
+
+    def test_next_page_link_to_the_same_page_ends_the_list(self) -> None:
+        page = self.source.next_novel_page(Listing.NOVEL_LIST, "https://example.org/?page=2")
+        self.assertEqual([novel.title for novel in page.novels], ["Second Novel", "Third Novel"])
+        self.assertIsNone(page.next_page_url)
 
     def test_search(self) -> None:
         self.assertTrue(self.source.supports_search)
         self.assertEqual(self.source.search_url("first novel"), "https://example.org/search?q=first+novel")
         results = self.source.search("first novel")
-        self.assertEqual([(novel.title, novel.url) for novel in results], [("First Novel", "https://example.org/novel/first")])
+        self.assertEqual([(novel.title, novel.url) for novel in results.novels], [("First Novel", "https://example.org/novel/first")])
+        self.assertIsNone(results.next_page_url)
 
     def test_get_novel(self) -> None:
         novel = self.source.get_novel("https://example.org/novel/first")

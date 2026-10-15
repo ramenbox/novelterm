@@ -40,6 +40,8 @@ class UrlRules:
 class NovelListRules:
     page: str
     links: Selector
+    next_page: Selector | None
+    """Link to the next page of the list. novelterm loads it only when the reader asks for more."""
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,8 @@ class SearchRules:
     """Search page URL with the placeholder {query}. novelterm puts in the URL-encoded search text."""
     results: Selector
     """Links to novel pages on the search page."""
+    next_page: Selector | None
+    """Link to the next page of results."""
 
 
 @dataclass(frozen=True)
@@ -207,6 +211,7 @@ def parse_source_definition(content: str) -> SourceDefinition:
         novel_list=NovelListRules(
             page=novel_list.required_text("page"),
             links=novel_list.required_selector("links"),
+            next_page=novel_list.optional_selector("next_page"),
         ),
         novel=NovelRules(
             title=novel.required_selector("title"),
@@ -234,7 +239,11 @@ def search_rules(search: TableReader | None) -> SearchRules | None:
     url_template = search.required_text("url")
     if url_template.count(SEARCH_QUERY_PLACEHOLDER) != 1:
         raise SourceFileError(f"'{search.key_name('url')}' must contain {SEARCH_QUERY_PLACEHOLDER} exactly once")
-    return SearchRules(url_template=url_template, results=search.required_selector("results"))
+    return SearchRules(
+        url_template=url_template,
+        results=search.required_selector("results"),
+        next_page=search.optional_selector("next_page"),
+    )
 
 
 def version_key(version: str) -> tuple[int, ...]:
