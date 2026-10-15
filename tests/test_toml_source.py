@@ -35,6 +35,11 @@ PAGES = {
           <a class="previous" href="/novel/first/chapter-1">Previous</a>
           <a class="next" href="/novel/first/chapter-3">Next</a>
         </div>""",
+    "https://example.org/search?q=first+novel": """
+        <ul class="results">
+          <li><a href="/novel/first">First Novel</a></li>
+          <li><a href="/novel/first/chapter-1">Chapter 1</a></li>
+        </ul>""",
     "https://example.org/novel/first/chapter-3": """
         <h1 class="chapter-title">Chapter 3</h1>
         <div class="text">Line one<br>Line two</div>
@@ -61,6 +66,12 @@ class TomlSourceTests(unittest.TestCase):
         novels = self.source.list_novels()
         self.assertEqual([novel.title for novel in novels], ["First Novel", "Second Novel"])
         self.assertEqual(novels[0].url, "https://example.org/novel/first")
+
+    def test_search(self) -> None:
+        self.assertTrue(self.source.supports_search)
+        self.assertEqual(self.source.search_url("first novel"), "https://example.org/search?q=first+novel")
+        results = self.source.search("first novel")
+        self.assertEqual([(novel.title, novel.url) for novel in results], [("First Novel", "https://example.org/novel/first")])
 
     def test_get_novel(self) -> None:
         novel = self.source.get_novel("https://example.org/novel/first")

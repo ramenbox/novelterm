@@ -1,13 +1,12 @@
 """A small HTML element tree on top of html.parser, for site scrapers."""
 
 import re
-import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
-USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) novelterm/0.1"
-REQUEST_TIMEOUT_SECONDS = 30
+from novelterm.network import fetch
+
 VOID_TAGS = frozenset(
     {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 )
@@ -107,14 +106,9 @@ def parse_html(page: str) -> Element:
 
 
 def fetch_bytes(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-        return response.read()
+    return fetch(url).content
 
 
 def fetch_document(url: str) -> Element:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        page = response.read().decode(charset, errors="replace")
-    return parse_html(page)
+    response = fetch(url)
+    return parse_html(response.content.decode(response.charset or "utf-8", errors="replace"))

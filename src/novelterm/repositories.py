@@ -24,7 +24,6 @@ sha256 before it installs a file. Source files are data and never run code.
 import hashlib
 import json
 import tempfile
-import urllib.error
 from dataclasses import asdict, dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -32,6 +31,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from novelterm.html_tree import fetch_bytes
+from novelterm.network import FetchError
 from novelterm.paths import INSTALLED_SOURCES_DIRECTORY, INSTALLED_SOURCES_FILE, REPOSITORIES_FILE
 from novelterm.sources.definition import (
     IDENTIFIER_PATTERN,
@@ -43,7 +43,7 @@ from novelterm.sources.definition import (
 
 INDEX_FORMAT_VERSION = 1
 ALLOWED_URL_SCHEMES = frozenset({"https", "http", "file"})
-DOWNLOAD_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError, ValueError)
+DOWNLOAD_ERRORS = (FetchError, ValueError)
 
 
 class RepositoryError(ValueError):
@@ -233,6 +233,12 @@ class RepositoryStore:
 
 def build_index(source_directory: Path, index_path: Path, repository_name: str) -> dict[str, Any]:
     """Make an index for all source files in a folder. File paths are relative to the index file."""
+    index_directory = index_path.resolve().parent
+    if not source_directory.resolve().is_relative_to(index_directory):
+        raise RepositoryError(
+            f"the index must be in {source_directory} or in a parent folder of it, "
+            "because the file paths in the index are relative to the index"
+        )
     entries: list[dict[str, str]] = []
     for file_path in sorted(source_directory.glob("*.toml")):
         content = file_path.read_bytes()
@@ -246,7 +252,7 @@ def build_index(source_directory: Path, index_path: Path, repository_name: str) 
                 "name": definition.name,
                 "version": definition.version,
                 "description": definition.description,
-                "file": file_path.resolve().relative_to(index_path.resolve().parent).as_posix(),
+                "file": file_path.resolve().relative_to(index_directory).as_posix(),
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         )

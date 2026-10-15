@@ -11,6 +11,7 @@ from novelterm.css_selectors import Selector, SelectorError, parse_selector
 SUPPORTED_FORMAT_VERSION = 1
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 VERSION_PATTERN = re.compile(r"^\d+(\.\d+)*$")
+SEARCH_QUERY_PLACEHOLDER = "{query}"
 
 
 class SourceFileError(ValueError):
@@ -62,6 +63,14 @@ class ChapterRules:
 
 
 @dataclass(frozen=True)
+class SearchRules:
+    url_template: str
+    """Search page URL with the placeholder {query}. novelterm puts in the URL-encoded search text."""
+    results: Selector
+    """Links to novel pages on the search page."""
+
+
+@dataclass(frozen=True)
 class SourceDefinition:
     identifier: str
     name: str
@@ -73,6 +82,7 @@ class SourceDefinition:
     novel_list: NovelListRules
     novel: NovelRules
     chapter: ChapterRules
+    search: SearchRules | None
 
 
 class TableReader:
@@ -143,12 +153,19 @@ class TableReader:
                 raise SourceFileError(f"'{self.key_name(key)}' must be a list of texts")
 
     def subtable(self, key: str) -> "TableReader":
+        match self.optional_subtable(key):
+            case TableReader() as reader:
+                return reader
+            case None:
+                raise SourceFileError(f"table [{self.key_name(key)}] is missing")
+
+    def optional_subtable(self, key: str) -> "TableReader | None":
         value = self.table.get(key)
         match value:
             case dict():
                 return TableReader(value, f"{self.prefix}{key}.")
             case None:
-                raise SourceFileError(f"table [{self.key_name(key)}] is missing")
+                return None
             case _:
                 raise SourceFileError(f"'{self.key_name(key)}' must be a table")
 
@@ -207,7 +224,17 @@ def parse_source_definition(content: str) -> SourceDefinition:
             previous=chapter.optional_selector("previous"),
             next=chapter.optional_selector("next"),
         ),
+        search=search_rules(root.optional_subtable("search")),
     )
+
+
+def search_rules(search: TableReader | None) -> SearchRules | None:
+    if search is None:
+        return None
+    url_template = search.required_text("url")
+    if url_template.count(SEARCH_QUERY_PLACEHOLDER) != 1:
+        raise SourceFileError(f"'{search.key_name('url')}' must contain {SEARCH_QUERY_PLACEHOLDER} exactly once")
+    return SearchRules(url_template=url_template, results=search.required_selector("results"))
 
 
 def version_key(version: str) -> tuple[int, ...]:

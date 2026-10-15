@@ -1,12 +1,12 @@
 """A Source that reads a site with the rules from a source file."""
 
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote_plus, urljoin, urlparse
 
 from novelterm.css_selectors import Selector
 from novelterm.html_tree import Element, clean_text, fetch_document
 from novelterm.models import Chapter, ChapterLink, LinkKind, NovelDetails, NovelSummary
-from novelterm.sources.definition import ChapterOrder, DescriptionText, SourceDefinition
+from novelterm.sources.definition import SEARCH_QUERY_PLACEHOLDER, ChapterOrder, DescriptionText, SourceDefinition
 
 CONTENT_TAGS = frozenset({"p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "li"})
 STATUS_LABEL_PREFIX = "status:"
@@ -36,20 +36,49 @@ class TomlSource:
             case _:
                 return LinkKind.UNKNOWN
 
+    @property
+    def supports_search(self) -> bool:
+        return self.definition.search is not None
+
     def list_novels(self) -> list[NovelSummary]:
         page_url = self.definition.novel_list.page
-        document = fetch_document(page_url)
+        return self.parse_novel_list(page_url, fetch_document(page_url))
+
+    def search(self, query: str) -> list[NovelSummary]:
+        match self.definition.search:
+            case None:
+                return []
+            case search_rules:
+                page_url = self.search_url(query)
+                return self.novel_links(page_url, search_rules.results.select(fetch_document(page_url)))
+
+    def search_url(self, query: str) -> str:
+        match self.definition.search:
+            case None:
+                raise ValueError(f"source '{self.identifier}' has no [search] table")
+            case search_rules:
+                return search_rules.url_template.replace(SEARCH_QUERY_PLACEHOLDER, quote_plus(query))
+
+    def get_novel(self, url: str) -> NovelDetails:
+        return self.parse_novel(url, fetch_document(url))
+
+    def get_chapter(self, url: str) -> Chapter:
+        return self.parse_chapter(url, fetch_document(url))
+
+    def parse_novel_list(self, page_url: str, document: Element) -> list[NovelSummary]:
+        return self.novel_links(page_url, self.definition.novel_list.links.select(document))
+
+    def novel_links(self, page_url: str, links: list[Element]) -> list[NovelSummary]:
         novels: dict[str, NovelSummary] = {}
-        for link in self.definition.novel_list.links.select(document):
+        for link in links:
             url = absolute_link(page_url, link)
             title = clean_text(link.text())
             if url and title and url not in novels and self.link_kind(url) == LinkKind.NOVEL:
                 novels[url] = NovelSummary(title=title, url=url)
         return list(novels.values())
 
-    def get_novel(self, url: str) -> NovelDetails:
+    def parse_novel(self, url: str, document: Element) -> NovelDetails:
         rules = self.definition.novel
-        document = fetch_document(url)
         status = text_of(first(rules.status, document))
         if status.lower().startswith(STATUS_LABEL_PREFIX):
             status = status[len(STATUS_LABEL_PREFIX) :].strip()
@@ -79,9 +108,8 @@ class TomlSource:
             locked_chapter_count=len(self.chapter_links(url, locked_links)),
         )
 
-    def get_chapter(self, url: str) -> Chapter:
+    def parse_chapter(self, url: str, document: Element) -> Chapter:
         rules = self.definition.chapter
-        document = fetch_document(url)
         novel_link = first(rules.novel_link, document)
         return Chapter(
             title=text_of(rules.title.select_first(document)) or url,

@@ -27,18 +27,71 @@ novelterm
 | Screen | Keys |
 |---|---|
 | Menus | `Up`/`Down` or `j`/`k` move, `Enter` or `Right` open, `Left` / `Esc` / `Backspace` / `q` back, `/` search (long lists) |
-| Reader | `Up`/`Down` or `j`/`k` scroll, `Space` / `b` page, `Right` / `Left` next or previous chapter, `q` back |
+| Reader | `Up`/`Down` or `j`/`k` scroll, `Space` / `b` page, `g` / `G` top or bottom, `Right` / `Left` next or previous chapter, `q` back. `Space` at the end of a chapter opens the next chapter. |
+| Library | `s` change the sort order, `d` remove the selected novel |
+| Long tasks | `q` or `Esc` stops a download or an update check |
 | Home | Back keys do not quit. Select **Quit** to close novelterm. |
 
 Home screens:
 
 - **Continue reading**: opens the last chapter at the saved scroll position.
-- **Library**: novels you started or added, most recently read first.
-- **Browse sources**: novel list of each installed source.
+- **Library**: novels you started or added, with the number of unread chapters.
+- **Check for updates**: loads the novel page of each library novel and lists the novels with new chapters.
+- **Browse sources**: novel list of each installed source, and search when the source supports it.
 - **Open a link**: opens a novel or chapter URL with the source that handles its host.
 - **Manage sources**: installed sources, repositories, reload, problems.
+- **Settings**: reader line width, theme, paragraph spacing, library sort.
 
-A novel goes into the library when you open one of its chapters.
+Reading:
+
+- A novel goes into the library when you open one of its chapters.
+- A chapter is marked as read when you go to the next chapter, or when you leave it at the end.
+  The chapter list shows read chapters in grey.
+- Unread chapters are the known chapters after your current chapter that are not marked as read.
+  novelterm updates the known chapters each time it loads the novel page.
+
+Offline reading: **Download for offline reading** on a novel page saves chapters to
+`DATA/downloads`. Downloaded chapters open without a connection. Downloads are for
+your own reading.
+
+## Network
+
+- novelterm waits at least 1 second between two requests to the same host.
+- HTTP 429, 500, 502, 503 and 504 are tried again up to 3 times. novelterm uses the
+  `Retry-After` header when the site sends it (60 seconds at most), else it waits 2
+  and then 4 seconds.
+- HTTP 401 and 403 are not tried again. novelterm shows that the site refused the
+  request and does not try to get around it.
+- Novel lists, novel pages and the last 20 chapters stay in memory until novelterm
+  closes. **Check for updates** always loads the novel pages again.
+
+## Settings
+
+`CONFIG/config.toml`. **Settings** in the app writes this file. You can also edit it.
+
+```toml
+[reader]
+line_width = 80          # 40 to 200
+theme = "terminal"       # "terminal", "dark", "light" or "sepia"
+paragraph_spacing = 1    # empty lines between paragraphs, 0 to 3
+
+[library]
+sort = "last_read"       # "last_read", "title" or "source"
+```
+
+The `sepia` theme needs a terminal with 256 colors. Other terminals show the `light`
+theme. When the file has an error, novelterm shows the error and uses the defaults.
+
+## Library backup
+
+```
+novelterm export-library novelterm-library.json
+novelterm import-library novelterm-library.json
+```
+
+`import-library` merges the copy into your library. For a novel in both, the newer
+reading position is kept and the read markers are combined. Downloads are not part
+of the copy.
 
 ## Files
 
@@ -53,7 +106,9 @@ A novel goes into the library when you open one of its chapters.
 | `DATA/sources/*.toml` | Source files installed from repositories. novelterm manages these. |
 | `DATA/installed.json` | Repository, version and sha256 of each installed source. |
 | `DATA/repositories.json` | Saved repository URLs. |
-| `DATA/library.json` | Library and reading positions. |
+| `DATA/library.json` | Library, reading positions and read markers. |
+| `DATA/downloads/` | Chapters downloaded for offline reading. |
+| `CONFIG/config.toml` | Settings. |
 
 When a local file and an installed file use the same `identifier`, novelterm uses
 the local file. **Manage sources → Problems** lists files that do not load, with
@@ -94,6 +149,10 @@ content = "div.chapter-text"           # chapter body
 novel_link = "a.back-to-novel"         # optional; links the chapter to its novel in the library
 previous = "a.previous-chapter"        # optional
 next = "a.next-chapter"                # optional
+
+[search]                               # optional table
+url = "https://example.org/?s={query}" # {query} is replaced by the URL-encoded search text
+results = "div.search-results a"       # links to novel pages; only links that match novel_pattern count
 ```
 
 Selectors support a subset of CSS: `tag`, `.class`, `#id`, combined forms such as
@@ -103,6 +162,20 @@ for single values.
 Chapter text: novelterm uses the `p`, `h1`–`h6`, `blockquote` and `li` children of
 the content element. When the content element has none of these, it uses the
 lines of its text, which covers sites that separate paragraphs with `<br>`.
+
+Check a source file against the live site:
+
+```
+novelterm check-source example-site.toml                       # novel list page
+novelterm check-source example-site.toml https://example.org/novel/first
+novelterm check-source example-site.toml https://example.org/novel/first/chapter-1
+novelterm check-source example-site.toml --search "first"      # [search] table
+novelterm check-source example-site.toml URL --html saved.html # use a saved page
+```
+
+The command prints the match count of each selector and what novelterm reads from
+the page: titles, counts and URLs, never chapter text. It ends with exit code 1 when
+a required selector matches nothing or the page gives no novels, chapters or text.
 
 The source format reads server-rendered HTML only. Sites that load chapters with
 JavaScript, need a login, or use bot challenges are not supported.

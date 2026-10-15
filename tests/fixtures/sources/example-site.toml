@@ -29,3 +29,7 @@ content = "div.text"
 novel_link = "a.back"
 previous = "div.navigation > a.previous"
 next = "div.navigation > a.next"
+
+[search]
+url = "https://example.org/search?q={query}"
+results = "ul.results a"

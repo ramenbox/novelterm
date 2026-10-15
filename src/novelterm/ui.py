@@ -5,7 +5,10 @@ import textwrap
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from novelterm.settings import ReaderTheme
+
 APP_NAME = "novelterm"
+FULL_COLOR_COUNT = 256
 
 
 class ColorPair:
@@ -15,6 +18,10 @@ class ColorPair:
     ACCENT = 4
     DIM = 5
     ERROR = 6
+    READER_TEXT = 10
+    READER_TITLE = 11
+    READER_DIM = 12
+    READER_ACCENT = 13
 
 
 def setup_colors() -> None:
@@ -29,6 +36,60 @@ def setup_colors() -> None:
     curses.init_pair(ColorPair.ACCENT, curses.COLOR_YELLOW, -1)
     curses.init_pair(ColorPair.DIM, curses.COLOR_WHITE, -1)
     curses.init_pair(ColorPair.ERROR, curses.COLOR_RED, -1)
+
+
+@dataclass(frozen=True)
+class ThemeColors:
+    """Foreground and background color numbers of the reader. -1 is the terminal color."""
+
+    background: int
+    text: int
+    title: int
+    dim: int
+    accent: int
+
+
+def theme_colors(theme: ReaderTheme, color_count: int) -> ThemeColors:
+    full_colors = color_count >= FULL_COLOR_COUNT
+    match (theme, full_colors):
+        case (ReaderTheme.TERMINAL, _):
+            return ThemeColors(-1, -1, curses.COLOR_CYAN, curses.COLOR_WHITE, curses.COLOR_YELLOW)
+        case (ReaderTheme.DARK, True):
+            return ThemeColors(234, 252, 110, 244, 179)
+        case (ReaderTheme.DARK, False):
+            return ThemeColors(curses.COLOR_BLACK, curses.COLOR_WHITE, curses.COLOR_CYAN, curses.COLOR_WHITE, curses.COLOR_YELLOW)
+        case (ReaderTheme.LIGHT, True):
+            return ThemeColors(255, 235, 24, 244, 130)
+        case (ReaderTheme.LIGHT, False) | (ReaderTheme.SEPIA, False):
+            return ThemeColors(curses.COLOR_WHITE, curses.COLOR_BLACK, curses.COLOR_BLUE, curses.COLOR_BLACK, curses.COLOR_RED)
+        case (ReaderTheme.SEPIA, True):
+            return ThemeColors(230, 94, 130, 137, 166)
+
+
+@dataclass(frozen=True)
+class ReaderAttributes:
+    text: int
+    title: int
+    dim: int
+    accent: int
+
+
+def apply_reader_theme(theme: ReaderTheme) -> ReaderAttributes:
+    """Set up the reader color pairs for a theme and return the attributes to draw with."""
+    if not curses.has_colors():
+        return ReaderAttributes(text=0, title=curses.A_BOLD, dim=curses.A_DIM, accent=curses.A_BOLD)
+    colors = theme_colors(theme, curses.COLORS)
+    curses.init_pair(ColorPair.READER_TEXT, colors.text, colors.background)
+    curses.init_pair(ColorPair.READER_TITLE, colors.title, colors.background)
+    curses.init_pair(ColorPair.READER_DIM, colors.dim, colors.background)
+    curses.init_pair(ColorPair.READER_ACCENT, colors.accent, colors.background)
+    dim_extra = curses.A_DIM if colors.dim == curses.COLOR_WHITE else 0
+    return ReaderAttributes(
+        text=curses.color_pair(ColorPair.READER_TEXT),
+        title=curses.color_pair(ColorPair.READER_TITLE) | curses.A_BOLD,
+        dim=curses.color_pair(ColorPair.READER_DIM) | dim_extra,
+        accent=curses.color_pair(ColorPair.READER_ACCENT) | curses.A_BOLD,
+    )
 
 
 def color(pair: int) -> int:
@@ -94,6 +155,25 @@ def read_key(screen: curses.window) -> KeyPress:
             return KeyPress(Key.CHARACTER, "")
 
 
+def key_waiting(screen: curses.window) -> KeyPress | None:
+    """Return a key the user already pressed, without waiting. None when no key is waiting."""
+    screen.nodelay(True)
+    try:
+        return read_key(screen)
+    except curses.error:
+        return None
+    finally:
+        screen.nodelay(False)
+
+
+def is_cancel_key(pressed: KeyPress | None) -> bool:
+    match pressed:
+        case KeyPress(Key.ESCAPE) | KeyPress(Key.CHARACTER, "q"):
+            return True
+        case _:
+            return False
+
+
 def put(screen: curses.window, row: int, column: int, text: str, attributes: int = 0) -> None:
     """Write text and cut it at the screen edge, so curses never raises."""
     height, width = screen.getmaxyx()
@@ -142,7 +222,15 @@ class WentBack:
     pass
 
 
-MenuResult = Selected | WentBack
+@dataclass(frozen=True)
+class KeyAction:
+    """The user pressed one of the extra keys of a menu on an item."""
+
+    action: object
+    value: object
+
+
+MenuResult = Selected | WentBack | KeyAction
 
 MENU_HINT = "Up/Down move | Enter open | <- back"
 TOP_LEVEL_HINT = "Up/Down move | Enter open"
@@ -168,12 +256,17 @@ def run_menu(
     initial_index: int = 0,
     searchable: bool = False,
     top_level_notice: str | None = None,
+    extra_keys: dict[str, object] | None = None,
+    extra_hint: str = "",
 ) -> MenuResult:
     """Show a list. The user picks one item with the arrow keys and Enter, or goes back.
 
     With top_level_notice set, the back keys show that notice and do not leave the menu.
     This stops a quick double "back" from closing the app.
+    extra_keys maps a character to an action. The key returns KeyAction(action, selected
+    item value); extra_hint describes these keys in the footer.
     """
+    extra_keys = extra_keys or {}
     selected_index = max(0, min(initial_index, len(items) - 1))
     first_visible_index = 0
     search_text = ""
@@ -234,7 +327,8 @@ def run_menu(
             case _ if top_level_notice:
                 draw_footer(screen, TOP_LEVEL_HINT)
             case _:
-                draw_footer(screen, FILTER_HINT if searchable else MENU_HINT)
+                base_hint = FILTER_HINT if searchable else MENU_HINT
+                draw_footer(screen, f"{base_hint} | {extra_hint}" if extra_hint else base_hint)
         screen.refresh()
 
         notice = ""
@@ -282,6 +376,8 @@ def run_menu(
                 selected_index = min(len(visible_items) - 1, selected_index + 1)
             case (False, KeyPress(Key.CHARACTER, "/")) if searchable:
                 typing_search = True
+            case (False, KeyPress(Key.CHARACTER, character)) if character in extra_keys and visible_items:
+                return KeyAction(extra_keys[character], visible_items[selected_index].value)
             case _:
                 pass
 
@@ -291,6 +387,21 @@ def show_loading(screen: curses.window, message: str) -> None:
     height, width = screen.getmaxyx()
     draw_bar(screen, 0, APP_NAME)
     put(screen, height // 2, max(0, (width - len(message)) // 2), message, color(ColorPair.ACCENT))
+    screen.refresh()
+
+
+def show_progress(screen: curses.window, title: str, lines: list[str]) -> None:
+    """Show the state of a long task. The user can press q or Esc to stop it."""
+    screen.erase()
+    width = screen.getmaxyx()[1]
+    draw_bar(screen, 0, APP_NAME)
+    put(screen, 2, 2, title, color(ColorPair.TITLE) | curses.A_BOLD)
+    row = 4
+    for line in lines:
+        for wrapped in textwrap.wrap(line, max(20, min(width - 4, 90))) or [""]:
+            put(screen, row, 2, wrapped)
+            row += 1
+    draw_footer(screen, "q stop")
     screen.refresh()
 
 
