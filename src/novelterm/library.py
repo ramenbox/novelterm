@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from novelterm.paths import LIBRARY_FILE
 
@@ -69,6 +70,21 @@ def merge_entries(first: LibraryEntry, second: LibraryEntry) -> LibraryEntry:
         read_chapter_urls=newer.read_chapter_urls | older.read_chapter_urls,
         known_chapter_urls=newer.known_chapter_urls or older.known_chapter_urls,
     )
+
+
+def url_slug(url: str) -> str:
+    """The last part of the URL path, for example "chapter-2" for https://example.org/novel/chapter-2/."""
+    return urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
+
+
+def url_with_same_slug(old_url: str, candidates: list[str]) -> str | None:
+    """The one candidate whose last path part equals the one of old_url. None when there is not exactly one."""
+    slug = url_slug(old_url)
+    match [candidate for candidate in candidates if slug and url_slug(candidate) == slug]:
+        case [only_match]:
+            return only_match
+        case _:
+            return None
 
 
 class Library:
@@ -165,6 +181,41 @@ class Library:
                     in_library=in_library,
                     updated_at=current_time(),
                 )
+        self.save()
+
+    def move_novel(
+        self,
+        old_novel_url: str,
+        new_novel_url: str,
+        novel_title: str,
+        chapter_title: str | None,
+        chapter_url: str | None,
+        scroll_fraction: float,
+        new_chapter_urls: list[str],
+    ) -> None:
+        """Move a novel to new URLs after the site changed them.
+
+        Read markers move to the new chapter URL with the same last path part.
+        Markers without exactly one such chapter are dropped.
+        """
+        old_entry = self.entries.pop(old_novel_url)
+        moved_read_urls = (url_with_same_slug(url, new_chapter_urls) for url in old_entry.read_chapter_urls)
+        moved = replace(
+            old_entry,
+            novel_url=new_novel_url,
+            novel_title=novel_title,
+            chapter_title=chapter_title,
+            chapter_url=chapter_url,
+            scroll_fraction=scroll_fraction,
+            read_chapter_urls=frozenset(url for url in moved_read_urls if url),
+            known_chapter_urls=tuple(new_chapter_urls),
+            updated_at=current_time(),
+        )
+        match self.entries.get(new_novel_url):
+            case None:
+                self.entries[new_novel_url] = moved
+            case LibraryEntry() as existing:
+                self.entries[new_novel_url] = merge_entries(existing, moved)
         self.save()
 
     def export_to(self, file_path: Path) -> int:

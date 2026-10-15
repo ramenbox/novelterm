@@ -47,7 +47,7 @@ class FetchError(Exception):
                     "or the page may need a login. novelterm does not try to get around this."
                 )
             case FetchFailure.NOT_FOUND:
-                return f"The page does not exist ({self.detail}). The source file may be out of date."
+                return f"The page does not exist ({self.detail}). The site may have moved it, or the source file may be out of date."
             case FetchFailure.RATE_LIMITED:
                 return f"The site asks novelterm to slow down ({self.detail}). Wait a few minutes and try again."
             case FetchFailure.SERVER_ERROR:

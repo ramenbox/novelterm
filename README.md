@@ -50,6 +50,13 @@ Reading:
 - Unread chapters are the known chapters after your current chapter that are not marked as read.
   novelterm updates the known chapters each time it loads the novel page.
 
+Moved novels: when a saved novel or chapter page returns HTTP 404 from **Continue
+reading**, **Library** or **Check for updates**, novelterm offers **Find the novel
+again**. You pick the novel from the source's novel list (same title at the top) and
+the chapter (novelterm suggests the chapter with the same last URL part). novelterm
+then moves your reading position and read markers to the new URLs. Read markers
+without a chapter with the same last URL part are dropped.
+
 Offline reading: **Download for offline reading** on a novel page saves chapters to
 `DATA/downloads`. Downloaded chapters open without a connection. Downloads are for
 your own reading.

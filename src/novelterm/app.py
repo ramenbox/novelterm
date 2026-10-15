@@ -12,9 +12,9 @@ from pathlib import Path
 
 from novelterm.checker import check_source_command
 from novelterm.downloads import DownloadStore
-from novelterm.library import Library, LibraryEntry, LibrarySort
-from novelterm.models import Chapter, LinkKind, NovelDetails, NovelSummary
-from novelterm.network import MINIMUM_SECONDS_BETWEEN_REQUESTS, FetchError
+from novelterm.library import Library, LibraryEntry, LibrarySort, url_with_same_slug
+from novelterm.models import Chapter, ChapterLink, LinkKind, NovelDetails, NovelSummary
+from novelterm.network import MINIMUM_SECONDS_BETWEEN_REQUESTS, FetchError, FetchFailure
 from novelterm.paths import LOCAL_SOURCES_DIRECTORY, SETTINGS_FILE
 from novelterm.repositories import build_index, EntryStatus, IndexEntry, RepositoryError, RepositoryIndex, RepositoryStore, SavedRepository, fetch_index
 from novelterm.settings import (
@@ -100,6 +100,11 @@ class ToggleLibrary:
 
 class SearchSource:
     pass
+
+
+class RecoveryChoice(Enum):
+    FIND_AGAIN = auto()
+    BACK = auto()
 
 
 class LibraryKey(Enum):
@@ -259,9 +264,9 @@ class App:
             case (None, _):
                 pass
             case (Source(), str(chapter_url)):
-                self.read(source, chapter_url, entry.scroll_fraction)
+                self.read(source, chapter_url, entry.scroll_fraction, saved_entry=entry)
             case (Source(), None):
-                self.novel_screen(source, entry.novel_url)
+                self.novel_screen(source, entry.novel_url, saved_entry=entry)
 
     def source_for_entry(self, entry: LibraryEntry) -> Source | None:
         loaded = self.catalog.by_identifier(entry.source_identifier)
@@ -309,7 +314,7 @@ class App:
                     selected_index = saved.index(entry)
                     source = self.source_for_entry(entry)
                     if source:
-                        self.novel_screen(source, entry.novel_url)
+                        self.novel_screen(source, entry.novel_url, saved_entry=entry)
                 case KeyAction(LibraryKey.SORT, _):
                     self.change_settings(replace(self.settings, library_sort=next_in_cycle(tuple(LibrarySort), sort)))
                     selected_index = 0
@@ -377,7 +382,7 @@ class App:
                 case Selected(LibraryEntry() as entry):
                     source = self.source_for_entry(entry)
                     if source:
-                        self.novel_screen(source, entry.novel_url)
+                        self.novel_screen(source, entry.novel_url, saved_entry=entry)
                 case _:
                     return
 
@@ -403,15 +408,9 @@ class App:
                     return
 
     def site_novels_screen(self, source: Source) -> None:
-        novels = self.novel_list_cache.get(source.identifier)
+        novels = self.load_novel_list(source)
         if novels is None:
-            show_loading(self.screen, f"Loading novels from {source.name}...")
-            try:
-                novels = source.list_novels()
-            except FetchError as error:
-                show_message(self.screen, "Could not load the site", [error.url, error.explanation()], is_error=True)
-                return
-            self.novel_list_cache[source.identifier] = novels
+            return
         selected_index = 0
         while True:
             items: list[MenuItem] = []
@@ -474,10 +473,17 @@ class App:
                 case _:
                     return
 
-    def novel_screen(self, source: Source, novel_url: str) -> None:
-        details = self.load_novel(source, novel_url)
-        if details is None:
-            return
+    def novel_screen(self, source: Source, novel_url: str, saved_entry: LibraryEntry | None = None) -> None:
+        """Show a novel page. With saved_entry set, a missing page offers to find the novel again."""
+        match self.fetch_novel(source, novel_url):
+            case FetchError(failure=FetchFailure.NOT_FOUND) as error if saved_entry:
+                self.recover_moved_novel(source, saved_entry, error)
+                return
+            case FetchError() as error:
+                show_message(self.screen, "Could not load the novel", [novel_url, error.explanation()], is_error=True)
+                return
+            case NovelDetails() as details:
+                pass
         while True:
             entry = self.library.entry(novel_url)
             items: list[MenuItem] = []
@@ -911,14 +917,22 @@ class App:
 
     # Reader
 
-    def read(self, source: Source, chapter_url: str, scroll_fraction: float = 0.0) -> None:
+    def read(self, source: Source, chapter_url: str, scroll_fraction: float = 0.0, saved_entry: LibraryEntry | None = None) -> None:
+        """Read from chapter_url on. With saved_entry set, a missing first chapter offers to find the novel again."""
         url: str | None = chapter_url
         attributes = apply_reader_theme(self.settings.theme)
         try:
             while url is not None:
-                chapter = self.load_chapter(source, url)
-                if chapter is None:
-                    return
+                match self.fetch_chapter(source, url):
+                    case FetchError(failure=FetchFailure.NOT_FOUND) as error if saved_entry and url == chapter_url:
+                        self.screen.bkgd(" ", 0)
+                        self.recover_moved_novel(source, saved_entry, error)
+                        return
+                    case FetchError() as error:
+                        show_message(self.screen, "Could not load the chapter", [url, error.explanation()], is_error=True)
+                        return
+                    case Chapter() as chapter:
+                        pass
                 novel_url = chapter.novel_url or chapter.url
                 novel_title = self.novel_title(source, novel_url, fallback=chapter.title)
                 outcome = self.show_chapter(source, chapter, novel_url, novel_title, scroll_fraction, attributes)
@@ -933,7 +947,7 @@ class App:
         finally:
             self.screen.bkgd(" ", 0)
 
-    def load_chapter(self, source: Source, url: str) -> Chapter | None:
+    def fetch_chapter(self, source: Source, url: str) -> Chapter | FetchError:
         """The chapter from memory, from the downloads, or from the site, in this order."""
         cached = self.chapter_cache.get(url) or self.downloads.load(url)
         if cached is not None:
@@ -942,8 +956,7 @@ class App:
         try:
             chapter = source.get_chapter(url)
         except FetchError as error:
-            show_message(self.screen, "Could not load the chapter", [url, error.explanation()], is_error=True)
-            return None
+            return error
         self.chapter_cache[url] = chapter
         while len(self.chapter_cache) > CHAPTER_CACHE_SIZE:
             self.chapter_cache.pop(next(iter(self.chapter_cache)))
@@ -1037,18 +1050,147 @@ class App:
 
     # Helpers
 
-    def load_novel(self, source: Source, novel_url: str) -> NovelDetails | None:
+    def fetch_novel(self, source: Source, novel_url: str) -> NovelDetails | FetchError:
         if novel_url in self.novel_cache:
             return self.novel_cache[novel_url]
         show_loading(self.screen, "Loading novel...")
         try:
             details = source.get_novel(novel_url)
         except FetchError as error:
-            show_message(self.screen, "Could not load the novel", [novel_url, error.explanation()], is_error=True)
-            return None
+            return error
         self.novel_cache[novel_url] = details
         self.remember_chapter_list(novel_url)
         return details
+
+    def load_novel(self, source: Source, novel_url: str) -> NovelDetails | None:
+        match self.fetch_novel(source, novel_url):
+            case FetchError() as error:
+                show_message(self.screen, "Could not load the novel", [novel_url, error.explanation()], is_error=True)
+                return None
+            case NovelDetails() as details:
+                return details
+
+    def load_novel_list(self, source: Source) -> list[NovelSummary] | None:
+        novels = self.novel_list_cache.get(source.identifier)
+        if novels is not None:
+            return novels
+        show_loading(self.screen, f"Loading novels from {source.name}...")
+        try:
+            novels = source.list_novels()
+        except FetchError as error:
+            show_message(self.screen, "Could not load the site", [error.url, error.explanation()], is_error=True)
+            return None
+        self.novel_list_cache[source.identifier] = novels
+        return novels
+
+    # Moved novels
+
+    def recover_moved_novel(self, source: Source, entry: LibraryEntry, error: FetchError) -> None:
+        """Offer to find a saved novel again after the site changed its URLs. The user confirms each step."""
+        result = run_menu(
+            self.screen,
+            breadcrumb=entry.novel_title,
+            title="This page no longer exists",
+            intro_lines=[
+                error.url,
+                error.explanation(),
+                f"novelterm can look for \"{entry.novel_title}\" in the novel list of {source.name}. "
+                "You pick the novel and the chapter, and novelterm moves your reading position there.",
+            ],
+            items=[
+                MenuItem("Find the novel again", RecoveryChoice.FIND_AGAIN, style=ItemStyle.ACCENT),
+                MenuItem("Back", RecoveryChoice.BACK, style=ItemStyle.DIM),
+            ],
+        )
+        match result:
+            case Selected(RecoveryChoice.FIND_AGAIN):
+                pass
+            case _:
+                return
+        novel_url = self.pick_moved_novel(source, entry)
+        if novel_url is None:
+            return
+        details = self.load_novel(source, novel_url)
+        if details is None:
+            return
+        chapter = self.pick_moved_chapter(details, entry)
+        match (entry.chapter_url, chapter):
+            case (str(), None):
+                return
+            case (_, ChapterLink(title=title, url=url)):
+                chapter_title, chapter_url = title, url
+            case (None, None):
+                chapter_title, chapter_url = None, None
+        same_chapter = chapter_url is not None and chapter_url == url_with_same_slug(entry.chapter_url or "", [chapter_url])
+        self.library.move_novel(
+            old_novel_url=entry.novel_url,
+            new_novel_url=details.url,
+            novel_title=details.title,
+            chapter_title=chapter_title,
+            chapter_url=chapter_url,
+            scroll_fraction=entry.scroll_fraction if same_chapter else 0.0,
+            new_chapter_urls=[chapter.url for chapter in details.chapters],
+        )
+        self.novel_screen(source, details.url)
+
+    def pick_moved_novel(self, source: Source, entry: LibraryEntry) -> str | None:
+        novels = self.load_novel_list(source)
+        if novels is None:
+            return None
+        saved_title = normalized_title(entry.novel_title)
+        same_title = [novel for novel in novels if normalized_title(novel.title) == saved_title]
+        others = [novel for novel in novels if normalized_title(novel.title) != saved_title]
+        items = [MenuItem(novel.title, novel.url, hint="same title", style=ItemStyle.ACCENT) for novel in same_title]
+        items += [MenuItem(novel.title, novel.url) for novel in others]
+        if not items:
+            show_message(self.screen, "No novels found", [f"The novel list of {source.name} is empty."], is_error=True)
+            return None
+        result = run_menu(
+            self.screen,
+            breadcrumb=entry.novel_title,
+            title="Pick the novel",
+            intro_lines=[
+                f"Saved title: {entry.novel_title}",
+                "Novels with the same title are at the top." if same_title else "No novel has the same title. Pick it from the list.",
+            ],
+            items=items,
+            searchable=True,
+        )
+        match result:
+            case Selected(str(novel_url)):
+                return novel_url
+            case _:
+                return None
+
+    def pick_moved_chapter(self, details: NovelDetails, entry: LibraryEntry) -> ChapterLink | None:
+        """Ask for the chapter that matches the saved chapter. None when nothing is saved or the user goes back."""
+        if entry.chapter_url is None or not details.chapters:
+            return None
+        chapter_urls = [chapter.url for chapter in details.chapters]
+        suggested_url = url_with_same_slug(entry.chapter_url, chapter_urls)
+        items = [
+            MenuItem(chapter.title, chapter, hint="suggested" if chapter.url == suggested_url else "",
+                     style=ItemStyle.ACCENT if chapter.url == suggested_url else ItemStyle.NORMAL)
+            for chapter in details.chapters
+        ]
+        result = run_menu(
+            self.screen,
+            breadcrumb=details.title,
+            title="Pick your chapter",
+            intro_lines=[
+                f"Saved chapter: {entry.chapter_title or entry.chapter_url}",
+                "The suggested chapter has the same last URL part as the saved one. Press Enter to use it, or pick another."
+                if suggested_url else "novelterm found no matching chapter. Pick it from the list.",
+            ],
+            items=items,
+            initial_index=chapter_urls.index(suggested_url) if suggested_url else 0,
+            searchable=True,
+        )
+        match result:
+            case Selected(ChapterLink() as chapter):
+                return chapter
+            case _:
+                return None
 
     def remember_chapter_list(self, novel_url: str) -> None:
         """Save the loaded chapter list of a novel in its library entry, when both exist."""
@@ -1082,6 +1224,10 @@ def count_label(count: int, noun: str) -> str:
             return f"{count} {text[:-1]}ies"
         case _:
             return f"{count} {noun}s"
+
+
+def normalized_title(title: str) -> str:
+    return " ".join(title.lower().split())
 
 
 def sort_label(sort: LibrarySort) -> str:

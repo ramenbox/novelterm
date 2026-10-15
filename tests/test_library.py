@@ -5,7 +5,7 @@ from pathlib import Path
 
 import json
 
-from novelterm.library import Library, LibrarySort
+from novelterm.library import Library, LibrarySort, url_with_same_slug
 
 
 class LibraryTests(unittest.TestCase):
@@ -100,6 +100,28 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(merged.chapter_title, "Chapter 3")
         self.assertEqual(merged.read_chapter_urls, frozenset({f"{novel_url}/chapter-1"}))
         self.assertIsNotNone(Library(self.library_file).entry("https://example.org/novel/second"))
+
+    def test_url_with_same_slug(self) -> None:
+        candidates = ["https://example.org/episodes/ep-1/", "https://example.org/episodes/ep-2/"]
+        self.assertEqual(url_with_same_slug("https://example.org/archives/episodes/ep-2", candidates), candidates[1])
+        self.assertIsNone(url_with_same_slug("https://example.org/archives/episodes/ep-9", candidates))
+        self.assertIsNone(url_with_same_slug("https://example.org/a/ep-1", [*candidates, "https://example.org/b/ep-1"]))
+
+    def test_move_novel(self) -> None:
+        old_novel = "https://example.org/archives/novels/first"
+        library = Library(self.library_file)
+        library.record_progress("example-site", "First", old_novel, "Ep 1", f"{old_novel}/ep-1", 1.0, finished=True)
+        library.record_progress("example-site", "First", old_novel, "Ep 2", f"{old_novel}/ep-2", 0.4)
+        new_chapters = ["https://example.org/episodes/ep-1/", "https://example.org/episodes/ep-2/", "https://example.org/episodes/ep-3/"]
+        library.move_novel(old_novel, "https://example.org/novels/first/", "First", "Episode 2", new_chapters[1], 0.4, new_chapters)
+
+        reloaded = Library(self.library_file)
+        self.assertIsNone(reloaded.entry(old_novel))
+        moved = reloaded.entry("https://example.org/novels/first/")
+        assert moved is not None
+        self.assertEqual((moved.chapter_url, moved.scroll_fraction), (new_chapters[1], 0.4))
+        self.assertEqual(moved.read_chapter_urls, frozenset({new_chapters[0]}))
+        self.assertEqual(moved.unread_count(), 1)
 
     def test_import_rejects_other_files(self) -> None:
         other_file = self.temporary_directory / "other.json"
