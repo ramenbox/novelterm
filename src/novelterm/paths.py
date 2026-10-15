@@ -31,6 +31,11 @@ INSTALLED_SOURCES_FILE = DATA_DIRECTORY / "installed.json"
 REPOSITORIES_FILE = DATA_DIRECTORY / "repositories.json"
 LOCAL_SOURCES_DIRECTORY = CONFIG_DIRECTORY / "sources"
 """Source files you write or copy by hand."""
+
+
+def templates_directory_for(sources_directory: Path) -> Path:
+    """The templates folder next to a sources folder: CONFIG/templates and DATA/templates."""
+    return sources_directory.parent / "templates"
 SETTINGS_FILE = CONFIG_DIRECTORY / "config.toml"
 DOWNLOADS_DIRECTORY = DATA_DIRECTORY / "downloads"
 """Chapters saved for offline reading."""

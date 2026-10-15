@@ -1,0 +1,27 @@
+format_version = 2
+kind = "template"
+identifier = "example-theme"
+name = "Example theme"
+version = "1.0.0"
+description = "Test fixture"
+
+[urls]
+novel_pattern = "^/novel/[^/]+/?$"
+chapter_pattern = "^/novel/[^/]+/chapter-"
+
+[novel_list]
+page = "{home_url}/novels/"
+links = "div.novels a"
+
+[novel]
+title = "h1.title"
+chapters = "ul.chapters a"
+chapter_order = "newest_first"
+
+[chapter]
+title = "h1.chapter-title"
+content = "div.text"
+
+[search]
+url = "{home_url}/?s={query}"
+results = "div.results a"

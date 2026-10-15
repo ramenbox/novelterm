@@ -1,0 +1,11 @@
+format_version = 2
+identifier = "themed-site"
+name = "Themed Site"
+version = "1.0.0"
+description = "Test fixture"
+home_url = "https://themed.example.org/"
+hosts = ["themed.example.org"]
+template = "example-theme"
+
+[novel]
+title = "div.post-title h1"

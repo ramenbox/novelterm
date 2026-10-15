@@ -105,6 +105,17 @@ class CheckSourceTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertRegex(output, r"images\s+2\n")
 
+    def test_template_option(self) -> None:
+        from test_templates import TEMPLATE_FILE, THEMED_SOURCE_FILE
+
+        html_file = self.temporary_directory / "list.html"
+        html_file.write_text('<div class="novels"><a href="/novel/one/">One</a></div>', encoding="utf-8")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            check_source_command([str(THEMED_SOURCE_FILE), "--html", str(html_file), "--template", str(TEMPLATE_FILE)])
+        self.assertIn("Template: example-theme 1.0.0 (Example theme)", output.getvalue())
+        self.assertIn("Page: https://themed.example.org/novels/ (novel list)", output.getvalue())
+
     def test_search(self) -> None:
         output, exit_code = self.run_check("", PAGES["https://example.org/search?q=first+novel"], "--search", "first novel")
         self.assertEqual(exit_code, 0)

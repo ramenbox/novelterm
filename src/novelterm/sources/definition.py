@@ -2,6 +2,7 @@
 
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -9,7 +10,14 @@ from typing import Any
 from novelterm.css_selectors import Selector, SelectorError, parse_selector
 from novelterm.network import RequestMethod
 
-SUPPORTED_FORMAT_VERSION = 1
+SUPPORTED_FORMAT_VERSIONS = (1, 2)
+TEMPLATE_FORMAT_VERSION = 2
+"""Source files that use a template, and template files, need this format_version."""
+TEMPLATE_KIND = "template"
+TEMPLATE_TABLES = ("urls", "novel_list", "novel", "chapter", "search")
+"""The tables that a template can set."""
+TEMPLATE_HEADER_KEYS = frozenset({"format_version", "kind", "identifier", "name", "version", "description"})
+HOME_URL_PLACEHOLDER = "{home_url}"
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 VERSION_PATTERN = re.compile(r"^\d+(\.\d+)*$")
 SEARCH_QUERY_PLACEHOLDER = "{query}"
@@ -119,6 +127,20 @@ class SourceDefinition:
     novel: NovelRules
     chapter: ChapterRules
     search: SearchRules | None
+    template: str | None
+    """The identifier of the template the source file uses."""
+
+
+@dataclass(frozen=True)
+class SourceTemplate:
+    """Shared rules for sites that use the same site software. A source file names it with template = "..."."""
+
+    identifier: str
+    name: str
+    version: str
+    description: str
+    tables: dict[str, dict[str, Any]]
+    """The template's tables, by name. Only names from TEMPLATE_TABLES."""
 
 
 class TableReader:
@@ -224,24 +246,121 @@ class TableReader:
                 raise SourceFileError(f"'{self.key_name(key)}' must be a table")
 
 
-def parse_source_definition(content: str) -> SourceDefinition:
+def load_toml(content: str) -> dict[str, Any]:
     try:
-        document = tomllib.loads(content)
+        return tomllib.loads(content)
     except tomllib.TOMLDecodeError as error:
         raise SourceFileError(f"not valid TOML: {error}") from error
 
-    root = TableReader(document, "")
-    format_version = document.get("format_version")
-    if format_version != SUPPORTED_FORMAT_VERSION:
-        raise SourceFileError(
-            f"'format_version' is {format_version!r}; this novelterm reads format_version = {SUPPORTED_FORMAT_VERSION}"
-        )
+
+def check_header(root: TableReader, allowed_versions: tuple[int, ...]) -> tuple[int, str, str]:
+    """Check format_version, identifier and version. Returns them."""
+    format_version = root.table.get("format_version")
+    match format_version:
+        case int() if format_version in allowed_versions:
+            pass
+        case _:
+            allowed = " or ".join(str(version) for version in allowed_versions)
+            raise SourceFileError(f"'format_version' is {format_version!r}; this novelterm reads format_version = {allowed}")
     identifier = root.required_text("identifier")
     if not IDENTIFIER_PATTERN.match(identifier):
         raise SourceFileError("'identifier' may only use a-z, 0-9, '-' and '_'")
     version = root.required_text("version")
     if not VERSION_PATTERN.match(version):
         raise SourceFileError("'version' must look like 1.0.0")
+    return format_version, identifier, version
+
+
+def template_name(content: str) -> str | None:
+    """The template a source file names, without checking the rest of the file."""
+    match load_toml(content).get("template"):
+        case str(name):
+            return name
+        case _:
+            return None
+
+
+def parse_template(content: str) -> SourceTemplate:
+    document = load_toml(content)
+    root = TableReader(document, "")
+    _, identifier, version = check_header(root, (TEMPLATE_FORMAT_VERSION,))
+    if document.get("kind") != TEMPLATE_KIND:
+        raise SourceFileError(f"'kind' must be \"{TEMPLATE_KIND}\" in a template file")
+    unknown_keys = sorted(set(document) - TEMPLATE_HEADER_KEYS - set(TEMPLATE_TABLES))
+    if unknown_keys:
+        raise SourceFileError(
+            f"a template can only set the tables {', '.join(TEMPLATE_TABLES)}; remove {', '.join(unknown_keys)}"
+        )
+    tables: dict[str, dict[str, Any]] = {}
+    for table_name in TEMPLATE_TABLES:
+        match document.get(table_name):
+            case None:
+                pass
+            case dict() as table:
+                tables[table_name] = table
+            case _:
+                raise SourceFileError(f"'{table_name}' must be a table")
+    return SourceTemplate(
+        identifier=identifier,
+        name=root.required_text("name"),
+        version=version,
+        description=root.optional_text("description") or "",
+        tables=tables,
+    )
+
+
+def apply_template(document: dict[str, Any], template: SourceTemplate) -> dict[str, Any]:
+    """The source file document with the template's tables filled in.
+
+    A key in the source file wins over the same key in the template. {home_url} in
+    the template's texts becomes the source's home_url without a trailing /.
+    """
+    home_url = TableReader(document, "").required_text("home_url").rstrip("/")
+    merged = dict(document)
+    for table_name, template_table in template.tables.items():
+        filled = with_home_url(template_table, home_url)
+        match document.get(table_name):
+            case None:
+                merged[table_name] = filled
+            case dict() as source_table:
+                merged[table_name] = {**filled, **source_table}
+            case _:
+                raise SourceFileError(f"'{table_name}' must be a table")
+    return merged
+
+
+def with_home_url(value: Any, home_url: str) -> Any:
+    match value:
+        case str():
+            return value.replace(HOME_URL_PLACEHOLDER, home_url)
+        case dict():
+            return {key: with_home_url(item, home_url) for key, item in value.items()}
+        case list():
+            return [with_home_url(item, home_url) for item in value]
+        case _:
+            return value
+
+
+def parse_source_definition(content: str, templates: Mapping[str, SourceTemplate] | None = None) -> SourceDefinition:
+    """Read a source file. templates are the available templates by identifier."""
+    document = load_toml(content)
+    format_version, identifier, version = check_header(TableReader(document, ""), SUPPORTED_FORMAT_VERSIONS)
+    match (document.get("template"), format_version):
+        case (None, _):
+            template = None
+        case (str(), 1):
+            raise SourceFileError(f"'template' needs format_version = {TEMPLATE_FORMAT_VERSION}")
+        case (str(name), _):
+            match (templates or {}).get(name):
+                case None:
+                    raise SourceFileError(f"the template '{name}' is not installed")
+                case SourceTemplate() as found:
+                    template = found
+                    document = apply_template(document, found)
+        case _:
+            raise SourceFileError("'template' must be a text")
+
+    root = TableReader(document, "")
 
     urls = root.subtable("urls")
     novel_list = root.subtable("novel_list")
@@ -281,6 +400,7 @@ def parse_source_definition(content: str) -> SourceDefinition:
             next=chapter.optional_selector("next"),
         ),
         search=search_rules(root.optional_subtable("search")),
+        template=template.identifier if template else None,
     )
 
 

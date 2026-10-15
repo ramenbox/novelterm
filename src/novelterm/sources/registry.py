@@ -1,17 +1,17 @@
-"""Find and load all source files on this computer."""
+"""Find and load all source files and templates on this computer."""
 
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 
-from novelterm.paths import INSTALLED_SOURCES_DIRECTORY, LOCAL_SOURCES_DIRECTORY
-from novelterm.sources.definition import SourceFileError, parse_source_definition
+from novelterm.paths import INSTALLED_SOURCES_DIRECTORY, LOCAL_SOURCES_DIRECTORY, templates_directory_for
+from novelterm.sources.definition import SourceFileError, SourceTemplate, parse_source_definition, parse_template
 from novelterm.sources.toml_source import TomlSource
 
 
 class SourceOrigin(Enum):
     LOCAL = auto()
-    """A file in the local sources folder, written or copied by hand."""
+    """A file in a local folder, written or copied by hand."""
     INSTALLED = auto()
     """A file installed from a repository."""
 
@@ -19,6 +19,13 @@ class SourceOrigin(Enum):
 @dataclass(frozen=True)
 class LoadedSource:
     source: TomlSource
+    origin: SourceOrigin
+
+
+@dataclass(frozen=True)
+class LoadedTemplate:
+    template: SourceTemplate
+    file_path: Path
     origin: SourceOrigin
 
 
@@ -31,6 +38,7 @@ class SourceProblem:
 @dataclass(frozen=True)
 class SourceCatalog:
     loaded: list[LoadedSource]
+    templates: list[LoadedTemplate]
     problems: list[SourceProblem]
 
     def sources(self) -> list[TomlSource]:
@@ -43,25 +51,68 @@ class SourceCatalog:
         return next((entry.source for entry in self.loaded if entry.source.handles(url)), None)
 
 
-def load_source_file(file_path: Path) -> TomlSource:
+def load_source_file(file_path: Path, templates: dict[str, SourceTemplate] | None = None) -> TomlSource:
+    return TomlSource(parse_source_definition(read_file(file_path), templates), file_path)
+
+
+def load_template_file(file_path: Path) -> SourceTemplate:
+    return parse_template(read_file(file_path))
+
+
+def read_file(file_path: Path) -> str:
     try:
-        content = file_path.read_text(encoding="utf-8")
+        return file_path.read_text(encoding="utf-8")
     except OSError as error:
         raise SourceFileError(f"cannot read the file: {error}") from error
-    return TomlSource(parse_source_definition(content), file_path)
+
+
+def toml_files(directory: Path) -> list[Path]:
+    return sorted(directory.glob("*.toml")) if directory.is_dir() else []
+
+
+def load_templates(
+    local_directory: Path, installed_directory: Path
+) -> tuple[dict[str, LoadedTemplate], list[SourceProblem]]:
+    """Load all template files. A local file wins over an installed file with the same identifier."""
+    loaded: dict[str, LoadedTemplate] = {}
+    problems: list[SourceProblem] = []
+    for directory, origin in ((local_directory, SourceOrigin.LOCAL), (installed_directory, SourceOrigin.INSTALLED)):
+        for file_path in toml_files(directory):
+            try:
+                template = load_template_file(file_path)
+            except SourceFileError as error:
+                problems.append(SourceProblem(file_path, str(error)))
+                continue
+            match loaded.get(template.identifier):
+                case None:
+                    loaded[template.identifier] = LoadedTemplate(template, file_path, origin)
+                case LoadedTemplate(file_path=existing_path):
+                    problems.append(
+                        SourceProblem(
+                            file_path,
+                            f"template identifier '{template.identifier}' is also used by {existing_path}; that file is used",
+                        )
+                    )
+    return loaded, problems
 
 
 def load_catalog(
     local_directory: Path = LOCAL_SOURCES_DIRECTORY,
     installed_directory: Path = INSTALLED_SOURCES_DIRECTORY,
 ) -> SourceCatalog:
-    """Load all source files. A local file wins over an installed file with the same identifier."""
+    """Load all templates, then all source files. A local file wins over an installed file with the same identifier.
+
+    Templates come from the templates folders next to the two sources folders.
+    """
+    loaded_templates, problems = load_templates(
+        templates_directory_for(local_directory), templates_directory_for(installed_directory)
+    )
+    templates = {identifier: loaded.template for identifier, loaded in loaded_templates.items()}
     loaded: dict[str, LoadedSource] = {}
-    problems: list[SourceProblem] = []
     for directory, origin in ((local_directory, SourceOrigin.LOCAL), (installed_directory, SourceOrigin.INSTALLED)):
-        for file_path in sorted(directory.glob("*.toml")) if directory.is_dir() else []:
+        for file_path in toml_files(directory):
             try:
-                source = load_source_file(file_path)
+                source = load_source_file(file_path, templates)
             except SourceFileError as error:
                 problems.append(SourceProblem(file_path, str(error)))
                 continue
@@ -76,4 +127,5 @@ def load_catalog(
                         )
                     )
     ordered = sorted(loaded.values(), key=lambda entry: entry.source.name.lower())
-    return SourceCatalog(loaded=ordered, problems=problems)
+    ordered_templates = sorted(loaded_templates.values(), key=lambda entry: entry.template.name.lower())
+    return SourceCatalog(loaded=ordered, templates=ordered_templates, problems=problems)

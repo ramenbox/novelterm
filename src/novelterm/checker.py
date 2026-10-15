@@ -13,8 +13,9 @@ from novelterm.css_selectors import Selector
 from novelterm.html_tree import Element, fetch_document, parse_html
 from novelterm.models import LinkKind, Listing
 from novelterm.network import FetchError, RequestMethod
-from novelterm.sources.definition import FieldRule, LabeledField, SourceFileError
-from novelterm.sources.registry import load_source_file
+from novelterm.paths import INSTALLED_SOURCES_DIRECTORY, LOCAL_SOURCES_DIRECTORY, templates_directory_for
+from novelterm.sources.definition import FieldRule, LabeledField, SourceFileError, SourceTemplate
+from novelterm.sources.registry import load_source_file, load_template_file, load_templates
 from novelterm.sources.toml_source import ChapterListPage, TomlSource, label_key
 
 TITLE_SAMPLE_SIZE = 3
@@ -209,6 +210,24 @@ def chapter_list_page(
             return ChapterListPage(chapter_list_url, load_page(chapter_list_url, chapter_list_html, request.method))
 
 
+def available_templates(template_file: Path | None) -> dict[str, SourceTemplate]:
+    """The installed and local templates, and the template file given on the command line."""
+    loaded, _ = load_templates(
+        templates_directory_for(LOCAL_SOURCES_DIRECTORY), templates_directory_for(INSTALLED_SOURCES_DIRECTORY)
+    )
+    templates = {identifier: entry.template for identifier, entry in loaded.items()}
+    match template_file:
+        case Path():
+            try:
+                template = load_template_file(template_file)
+            except SourceFileError as error:
+                sys.exit(f"error: {template_file}: {error}")
+            templates[template.identifier] = template
+        case None:
+            pass
+    return templates
+
+
 def check_source_command(arguments: list[str]) -> None:
     parser = argparse.ArgumentParser(
         prog="novelterm check-source",
@@ -223,6 +242,12 @@ def check_source_command(arguments: list[str]) -> None:
     parser.add_argument("--novel-list", action="store_true", help="URL is a later page of the novel list")
     parser.add_argument("--html", type=Path, metavar="FILE", help="read the page from a saved HTML file instead of the site")
     parser.add_argument(
+        "--template",
+        type=Path,
+        metavar="FILE",
+        help="use this template file instead of an installed template with the same identifier",
+    )
+    parser.add_argument(
         "--chapter-list-html",
         type=Path,
         metavar="FILE",
@@ -230,11 +255,18 @@ def check_source_command(arguments: list[str]) -> None:
     )
     options = parser.parse_args(arguments)
 
+    templates = available_templates(options.template)
     try:
-        source = load_source_file(options.file)
+        source = load_source_file(options.file, templates)
     except SourceFileError as error:
         sys.exit(f"error: {options.file}: {error}")
     print(f"Source file OK: {source.identifier} {source.definition.version} ({source.name})")
+    match source.definition.template:
+        case str(template_identifier):
+            template = templates[template_identifier]
+            print(f"Template: {template.identifier} {template.version} ({template.name})")
+        case None:
+            pass
 
     search_query: str | None = options.search
     given_url: str | None = options.url

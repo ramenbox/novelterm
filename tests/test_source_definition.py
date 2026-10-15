@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from novelterm.settings import Settings, parse_settings
-from novelterm.sources.definition import ChapterOrder, SourceFileError, parse_source_definition
+from novelterm.sources.definition import ChapterOrder, SourceFileError, parse_source_definition, parse_template
 
 PROJECT_DIRECTORY = Path(__file__).resolve().parent.parent
 FIXTURE = PROJECT_DIRECTORY / "tests" / "fixtures" / "sources" / "example-site.toml"
@@ -23,10 +23,19 @@ class SourceDefinitionTests(unittest.TestCase):
 
     def test_readme_example_parses(self) -> None:
         readme = (PROJECT_DIRECTORY / "README.md").read_text(encoding="utf-8")
-        examples = [block for block in re.findall(r"```toml\n(.*?)```", readme, re.DOTALL) if "format_version" in block]
+        examples = [block for block in re.findall(r"```toml\n(.*?)```", readme, re.DOTALL) if "format_version = 1" in block]
         self.assertEqual(len(examples), 1)
         definition = parse_source_definition(examples[0])
         self.assertIsNotNone(definition.search)
+
+    def test_readme_template_examples_parse(self) -> None:
+        readme = (PROJECT_DIRECTORY / "README.md").read_text(encoding="utf-8")
+        blocks = [block for block in re.findall(r"```toml\n(.*?)```", readme, re.DOTALL) if "format_version = 2" in block]
+        source_block, template_block = blocks
+        template = parse_template(template_block)
+        definition = parse_source_definition(source_block, {template.identifier: template})
+        self.assertEqual(definition.novel_list.page, "https://example.org/novels/")
+        self.assertEqual(definition.novel.title.text, "div.post-title h1")
 
     def test_readme_settings_example_parses(self) -> None:
         readme = (PROJECT_DIRECTORY / "README.md").read_text(encoding="utf-8")
@@ -37,7 +46,7 @@ class SourceDefinitionTests(unittest.TestCase):
     def test_errors_name_the_key(self) -> None:
         content = FIXTURE.read_text(encoding="utf-8")
         cases = {
-            "wrong format version": (content.replace("format_version = 1", "format_version = 2"), "format_version"),
+            "wrong format version": (content.replace("format_version = 1", "format_version = 3"), "format_version"),
             "bad identifier": (content.replace('"example-site"', '"Example Site"'), "identifier"),
             "bad version": (content.replace('version = "1.0.0"', 'version = "one"'), "version"),
             "bad selector": (content.replace('title = "h1.title"', 'title = "h1 >"'), "novel.title"),

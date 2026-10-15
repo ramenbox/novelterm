@@ -112,8 +112,10 @@ of the copy.
 | Path | Content |
 |---|---|
 | `CONFIG/sources/*.toml` | Local source files. You manage these. |
+| `CONFIG/templates/*.toml` | Local templates. You manage these. |
 | `DATA/sources/*.toml` | Source files installed from repositories. novelterm manages these. |
-| `DATA/installed.json` | Repository, version and sha256 of each installed source. |
+| `DATA/templates/*.toml` | Templates installed from repositories. novelterm manages these. |
+| `DATA/installed.json` | Repository, version and sha256 of each installed source and template. |
 | `DATA/repositories.json` | Saved repository URLs. |
 | `DATA/library.json` | Library, reading positions and read markers. |
 | `DATA/downloads/` | Chapters downloaded for offline reading. |
@@ -126,7 +128,7 @@ the reason.
 ## Source file format
 
 ```toml
-format_version = 1                 # must be 1
+format_version = 1                 # 1, or 2 for a source file that uses a template
 identifier = "example-site"        # a-z, 0-9, '-', '_'; stored in the library, do not change
 name = "Example Site"
 version = "1.0.0"                  # increase for each change you publish
@@ -219,6 +221,72 @@ The command prints the match count of each selector and what novelterm reads fro
 the page: titles, counts and URLs, never chapter text. It ends with exit code 1 when
 a required selector matches nothing or the page gives no novels, chapters or text.
 
+### Templates
+
+Many sites use the same site software and differ only in their address. A template
+holds the rules for that software once. A source file that names a template sets
+only what is specific to its site:
+
+```toml
+format_version = 2
+identifier = "example-site"
+name = "Example Site"
+version = "1.0.0"
+home_url = "https://example.org/"
+hosts = ["example.org"]
+template = "example-theme"
+
+[novel]
+title = "div.post-title h1"            # optional: a key here wins over the same key in the template
+```
+
+A template file:
+
+```toml
+format_version = 2                     # must be 2
+kind = "template"
+identifier = "example-theme"           # the name that source files use in template = "..."
+name = "Example theme"
+version = "1.0.0"
+description = "Short text"             # optional
+
+[urls]
+novel_pattern = "^/novel/[^/]+/?$"
+chapter_pattern = "^/novel/[^/]+/chapter-"
+
+[novel_list]
+page = "{home_url}/novels/"            # {home_url} is the source's home_url without the trailing /
+links = "div.novels a"
+
+[novel]
+title = "h1.title"
+chapters = "ul.chapters a"
+
+[chapter]
+title = "h1.chapter-title"
+content = "div.text"
+```
+
+Rules:
+
+- A template can only set the tables `urls`, `novel_list`, `novel`, `chapter` and
+  `search`. It cannot set `home_url` or `hosts`.
+- The source file and the template are combined per table. A key in the source file
+  wins over the same key in the template. A table value, such as a labeled field
+  or `[novel.chapter_list]`, is replaced as a whole.
+- `{home_url}` in any text of the template becomes the source's `home_url` without
+  the trailing `/`.
+- Templates are in `CONFIG/templates` (local) and `DATA/templates` (installed). A
+  local template wins over an installed template with the same identifier.
+- A source file whose template is not installed does not load. **Manage sources →
+  Problems** shows the reason.
+
+Check a source file with a template file that is not installed:
+
+```
+novelterm check-source example-site.toml --template example-theme.toml
+```
+
 The source format reads server-rendered HTML only. Sites that load chapters with
 JavaScript, need a login, or use bot challenges are not supported.
 
@@ -240,21 +308,31 @@ repository served over HTTPS:
       "file": "sources/example-site.toml",
       "sha256": "<sha256 hex digest of the file>"
     }
+  ],
+  "templates": [
+    {
+      "identifier": "example-theme",
+      "name": "Example theme",
+      "version": "1.0.0",
+      "description": "Short text",
+      "file": "templates/example-theme.toml",
+      "sha256": "<sha256 hex digest of the file>"
+    }
   ]
 }
 ```
 
-`file` is relative to the index URL, or an absolute URL. Supported URL schemes:
+`templates` is optional. `file` is relative to the index URL, or an absolute URL. Supported URL schemes:
 `https`, `http`, `file`.
 
 Make the index from a folder of source files:
 
 ```
-novelterm make-index sources/ --output index.json --name "Example sources"
+novelterm make-index sources/ --output index.json --name "Example sources" --templates templates/
 ```
 
-`make-index` checks every source file and fails on invalid files or duplicate
-identifiers.
+`make-index` checks every template and every source file, with these templates. It
+fails on invalid files or duplicate identifiers.
 
 Install rules:
 
@@ -263,6 +341,13 @@ Install rules:
   match the index entry.
 - If a check fails, nothing changes on disk.
 - An entry with a higher `version` than the installed one shows as an update.
+- A source that uses a template also installs that template from the same
+  repository, when the template is not installed or has an update. The repository
+  must list the template, unless it is already installed.
+- A template installed from another repository is not replaced automatically.
+  Remove it first.
+- Removing a template does not remove the sources that use it. They do not load
+  until the template is installed again.
 
 ## Development
 

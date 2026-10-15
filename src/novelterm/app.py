@@ -16,7 +16,17 @@ from novelterm.library import Library, LibraryEntry, LibrarySort, url_with_same_
 from novelterm.models import Chapter, ChapterLink, LinkKind, Listing, NovelDetails, NovelListPage, NovelSummary
 from novelterm.network import MINIMUM_SECONDS_BETWEEN_REQUESTS, FetchError, FetchFailure
 from novelterm.paths import LOCAL_SOURCES_DIRECTORY, SETTINGS_FILE
-from novelterm.repositories import build_index, EntryStatus, IndexEntry, RepositoryError, RepositoryIndex, RepositoryStore, SavedRepository, fetch_index
+from novelterm.repositories import (
+    EntryKind,
+    EntryStatus,
+    IndexEntry,
+    RepositoryError,
+    RepositoryIndex,
+    RepositoryStore,
+    SavedRepository,
+    build_index,
+    fetch_index,
+)
 from novelterm.settings import (
     LINE_WIDTH_CHOICES,
     PARAGRAPH_SPACING_RANGE,
@@ -792,11 +802,15 @@ class App:
                 show_message(self.screen, "No sources yet", NO_SOURCES_HELP)
                 return
             items = [MenuItem(loaded.source.name, loaded, hint=self.origin_label(loaded)) for loaded in self.catalog.loaded]
+            template_names = ", ".join(f"{loaded.template.name} v{loaded.template.version}" for loaded in self.catalog.templates)
             result = run_menu(
                 self.screen,
                 breadcrumb="Manage sources",
                 title="Installed sources",
-                intro_lines=["A local file wins over an installed file with the same identifier."],
+                intro_lines=[
+                    "A local file wins over an installed file with the same identifier.",
+                    f"Templates: {template_names or 'none'}",
+                ],
                 items=items,
             )
             match result:
@@ -812,7 +826,7 @@ class App:
                     )
                 case Selected(LoadedSource(origin=SourceOrigin.INSTALLED) as loaded):
                     if self.confirm(f"Remove {loaded.source.name}?", ["Novels from this source stay in your library."]):
-                        self.repositories.uninstall(loaded.source.identifier)
+                        self.repositories.uninstall(EntryKind.SOURCE, loaded.source.identifier)
                         self.reload_sources()
                 case _:
                     return
@@ -821,10 +835,14 @@ class App:
         version = loaded.source.definition.version
         match loaded.origin:
             case SourceOrigin.LOCAL:
-                return f"v{version} | local file"
+                origin = "local file"
             case SourceOrigin.INSTALLED:
                 record = self.repositories.installed.get(loaded.source.identifier)
                 origin = self.repositories.repository_name(record.repository_url) if record else "unknown repository"
+        match loaded.source.definition.template:
+            case str(template):
+                return f"v{version} | {origin} | template {template}"
+            case None:
                 return f"v{version} | {origin}"
 
     def repositories_screen(self) -> None:
@@ -875,16 +893,28 @@ class App:
                 MenuItem(entry.name, entry, hint=self.entry_hint(entry, repository.url)) for entry in index.entries
             ]
             items.append(MenuItem("Remove this repository", RemoveRepository(), style=ItemStyle.DIM))
+            source_count = sum(1 for entry in index.entries if entry.kind == EntryKind.SOURCE)
+            template_count = len(index.entries) - source_count
+            templates_note = (
+                f" and {count_label(template_count, 'template')}. A template holds shared rules for sources; "
+                "novelterm installs it with the first source that needs it"
+                if template_count
+                else ""
+            )
             result = run_menu(
                 self.screen,
                 breadcrumb="Repositories",
                 title=index.name,
-                intro_lines=[repository.url, f"{count_label(len(index.entries), 'source')}. Select a source to install, update or remove it."],
+                intro_lines=[
+                    repository.url,
+                    f"{count_label(source_count, 'source')}{templates_note}.",
+                    "Select an entry to install, update or remove it.",
+                ],
                 items=items,
             )
             match result:
                 case Selected(IndexEntry() as entry):
-                    self.repository_entry_action(entry, repository)
+                    self.repository_entry_action(entry, repository, index)
                 case Selected(RemoveRepository()):
                     if self.confirm(f"Remove {repository.name}?", ["Sources you installed from it stay installed."]):
                         self.repositories.remove_repository(repository.url)
@@ -893,47 +923,68 @@ class App:
                     return
 
     def entry_hint(self, entry: IndexEntry, repository_url: str) -> str:
+        kind_label = "template | " if entry.kind == EntryKind.TEMPLATE else ""
         match self.repositories.status_of(entry, repository_url):
             case EntryStatus.NOT_INSTALLED:
-                return f"v{entry.version} | not installed"
+                return f"{kind_label}v{entry.version} | not installed"
             case EntryStatus.INSTALLED:
-                return f"v{entry.version} | installed"
+                return f"{kind_label}v{entry.version} | installed"
             case EntryStatus.UPDATE_AVAILABLE:
-                installed_version = self.repositories.installed[entry.identifier].version
-                return f"update v{installed_version} -> v{entry.version}"
+                installed_version = self.repositories.records(entry.kind)[entry.identifier].version
+                return f"{kind_label}update v{installed_version} -> v{entry.version}"
             case EntryStatus.FROM_OTHER_REPOSITORY:
-                return "installed from another repository"
+                return f"{kind_label}installed from another repository"
 
-    def repository_entry_action(self, entry: IndexEntry, repository: SavedRepository) -> None:
+    def repository_entry_action(self, entry: IndexEntry, repository: SavedRepository, index: RepositoryIndex) -> None:
         status = self.repositories.status_of(entry, repository.url)
-        match status:
-            case EntryStatus.NOT_INSTALLED | EntryStatus.UPDATE_AVAILABLE:
-                self.install_entry(entry, repository)
-            case EntryStatus.INSTALLED:
+        match (status, entry.kind):
+            case (EntryStatus.NOT_INSTALLED | EntryStatus.UPDATE_AVAILABLE, _):
+                self.install_entry(entry, repository, index)
+            case (EntryStatus.INSTALLED, EntryKind.SOURCE):
                 if self.confirm(f"Remove {entry.name}?", ["Novels from this source stay in your library."]):
-                    self.repositories.uninstall(entry.identifier)
+                    self.repositories.uninstall(entry.kind, entry.identifier)
                     self.reload_sources()
-            case EntryStatus.FROM_OTHER_REPOSITORY:
+            case (EntryStatus.INSTALLED, EntryKind.TEMPLATE):
+                users = [loaded.source.name for loaded in self.catalog.loaded if loaded.source.definition.template == entry.identifier]
+                if self.confirm(
+                    f"Remove the template {entry.name}?",
+                    [f"These sources use it and stop loading until you install it again: {', '.join(users)}." if users
+                     else "No installed source uses it."],
+                ):
+                    self.repositories.uninstall(entry.kind, entry.identifier)
+                    self.reload_sources()
+            case (EntryStatus.FROM_OTHER_REPOSITORY, _):
                 if self.confirm(
                     f"Replace {entry.name}?",
-                    [f"A source with the identifier '{entry.identifier}' is installed from another repository.", "Install this one instead?"],
+                    [f"An entry with the identifier '{entry.identifier}' is installed from another repository.", "Install this one instead?"],
                 ):
-                    self.install_entry(entry, repository)
+                    self.install_entry(entry, repository, index)
 
-    def install_entry(self, entry: IndexEntry, repository: SavedRepository) -> None:
+    def install_entry(self, entry: IndexEntry, repository: SavedRepository, index: RepositoryIndex) -> None:
         show_loading(self.screen, f"Installing {entry.name}...")
         try:
-            self.repositories.install(entry, repository.url)
+            written = self.repositories.install(entry, index)
         except RepositoryError as error:
             show_message(self.screen, f"Could not install {entry.name}", [str(error)], is_error=True)
             return
         self.reload_sources()
-        lines = [f"{entry.name} v{entry.version} is installed. You find it under Browse sources."]
-        match self.catalog.by_identifier(entry.identifier):
-            case LoadedSource(origin=SourceOrigin.LOCAL, source=local_source):
+        match entry.kind:
+            case EntryKind.SOURCE:
+                lines = [f"{entry.name} v{entry.version} is installed. You find it under Browse sources."]
+            case EntryKind.TEMPLATE:
+                lines = [f"The template {entry.name} v{entry.version} is installed. Sources that use it now load with it."]
+        lines += [
+            f"The template {written_entry.name} v{written_entry.version} is installed too, because {entry.name} uses it."
+            for written_entry in written
+            if written_entry != entry
+        ]
+        match (entry.kind, self.catalog.by_identifier(entry.identifier)):
+            case (EntryKind.SOURCE, LoadedSource(origin=SourceOrigin.LOCAL, source=local_source)):
                 lines.append(f"Note: the local file {local_source.file_path} has the same identifier and is used instead.")
             case _:
                 pass
+        if self.catalog.problems:
+            lines.append(f"{count_label(len(self.catalog.problems), 'file')} with problems: see Manage sources > Problems.")
         show_message(self.screen, "Installed", lines)
 
     def confirm(self, question: str, lines: list[str]) -> bool:
@@ -1390,18 +1441,21 @@ def image_notice(chapter: Chapter) -> str | None:
 def make_index_command(arguments: list[str]) -> None:
     parser = argparse.ArgumentParser(
         prog="novelterm make-index",
-        description="Make a repository index.json for all .toml source files in a folder.",
+        description="Make a repository index.json for all .toml source files in a folder, and optional templates.",
     )
     parser.add_argument("folder", type=Path, help="folder with the .toml source files")
     parser.add_argument("--output", type=Path, default=Path("index.json"), help="index file to write (default: index.json)")
     parser.add_argument("--name", default="novelterm sources", help="repository name shown in the app")
+    parser.add_argument("--templates", type=Path, metavar="FOLDER", help="folder with the .toml template files")
     options = parser.parse_args(arguments)
     try:
-        index = build_index(options.folder, options.output, options.name)
+        index = build_index(options.folder, options.output, options.name, options.templates)
     except RepositoryError as error:
         sys.exit(f"error: {error}")
     options.output.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
-    print(f"Wrote {options.output} with {count_label(len(index['sources']), 'source')}.")
+    template_count = len(index.get("templates", []))
+    templates_note = f" and {count_label(template_count, 'template')}" if template_count else ""
+    print(f"Wrote {options.output} with {count_label(len(index['sources']), 'source')}{templates_note}.")
 
 
 def export_library_command(arguments: list[str]) -> None:
