@@ -200,6 +200,8 @@ for single values.
 Chapter text: novelterm uses the `p`, `h1`–`h6`, `blockquote` and `li` children of
 the content element. When the content element has none of these, it uses the
 lines of its text, which covers sites that separate paragraphs with `<br>`.
+novelterm does not show or download images. The reader shows the number of images
+in a chapter below its title, and the chapter URL when the chapter has only images.
 
 Check a source file against the live site:
 

@@ -159,13 +159,15 @@ class TomlSource:
     def parse_chapter(self, url: str, document: Element) -> Chapter:
         rules = self.definition.chapter
         novel_link = first(rules.novel_link, document)
+        content = rules.content.select_first(document)
         return Chapter(
             title=text_of(rules.title.select_first(document)) or url,
             url=url,
             novel_url=absolute_link(url, novel_link) if novel_link else None,
-            paragraphs=paragraphs_of(rules.content.select_first(document)),
+            paragraphs=paragraphs_of(content),
             previous_url=self.chapter_link_url(url, first(rules.previous, document)),
             next_url=self.chapter_link_url(url, first(rules.next, document)),
+            image_count=len(content.find_all("img")) if content else 0,
         )
 
     def chapter_links(self, page_url: str, links: list[Element]) -> list[ChapterLink]:

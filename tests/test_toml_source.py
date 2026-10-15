@@ -108,6 +108,25 @@ class TomlSourceTests(unittest.TestCase):
         self.assertIsNone(chapter.novel_url)
 
 
+IMAGE_CHAPTER_PAGES = {
+    "https://example.org/novel/first/chapter-5": """
+        <h1 class="chapter-title">Chapter 5</h1>
+        <div class="text"><p><img src="/one.png"></p><img src="/two.png"></div>""",
+    "https://example.org/novel/first/chapter-6": """
+        <h1 class="chapter-title">Chapter 6</h1>
+        <div class="text"><p>Text.</p><img src="/one.png"></div>""",
+}
+
+
+class ChapterImageTests(unittest.TestCase):
+    def test_images_are_counted(self) -> None:
+        source = TomlSource(parse_source_definition(FIXTURE.read_text(encoding="utf-8")), FIXTURE)
+        only_images = source.parse_chapter("https://example.org/novel/first/chapter-5", parse_html(IMAGE_CHAPTER_PAGES["https://example.org/novel/first/chapter-5"]))
+        self.assertEqual((only_images.paragraphs, only_images.image_count), ([], 2))
+        with_text = source.parse_chapter("https://example.org/novel/first/chapter-6", parse_html(IMAGE_CHAPTER_PAGES["https://example.org/novel/first/chapter-6"]))
+        self.assertEqual((with_text.paragraphs, with_text.image_count), (["Text."], 1))
+
+
 LABELED_STATUS = 'status = { item = "div.row", label = "span.label", label_text = "status", value = "span.value" }'
 
 LABELED_PAGE = """

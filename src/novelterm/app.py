@@ -1342,6 +1342,12 @@ def layout_chapter(chapter: Chapter, width: int, paragraph_spacing: int, attribu
     width = max(20, width)
     lines: list[tuple[str, int]] = [(line, attributes.title) for line in textwrap.wrap(chapter.title, width)]
     lines.append(("", attributes.text))
+    match image_notice(chapter):
+        case str(notice):
+            lines += [(line, attributes.dim) for line in textwrap.wrap(notice, width)]
+            lines.append(("", attributes.text))
+        case None:
+            pass
     spacing = [("", attributes.text)] * paragraph_spacing
     for paragraph in chapter.paragraphs:
         for paragraph_line in paragraph.split("\n"):
@@ -1352,6 +1358,16 @@ def layout_chapter(chapter: Chapter, width: int, paragraph_spacing: int, attribu
     if chapter.next_url:
         lines.append(("Press Space or -> for the next chapter".center(width), attributes.accent))
     return lines
+
+
+def image_notice(chapter: Chapter) -> str | None:
+    match (chapter.image_count, chapter.paragraphs):
+        case (0, _):
+            return None
+        case (count, []):
+            return f"This chapter contains only images ({count}). novelterm shows text only. Open the chapter in a browser to see them: {chapter.url}"
+        case (count, _):
+            return f"{count_label(count, 'image')} in this chapter not shown. novelterm shows text only."
 
 
 def make_index_command(arguments: list[str]) -> None:

@@ -97,6 +97,14 @@ class CheckSourceTests(unittest.TestCase):
         self.assertIn('novel.chapters         "ul.free a" -> 2 matches', output.getvalue())
         self.assertRegex(output.getvalue(), r"chapters\s+2\n")
 
+    def test_chapter_with_only_images_is_not_a_problem(self) -> None:
+        from test_toml_source import IMAGE_CHAPTER_PAGES
+
+        url = "https://example.org/novel/first/chapter-5"
+        output, exit_code = self.run_check(url, IMAGE_CHAPTER_PAGES[url])
+        self.assertEqual(exit_code, 0)
+        self.assertRegex(output, r"images\s+2\n")
+
     def test_search(self) -> None:
         output, exit_code = self.run_check("", PAGES["https://example.org/search?q=first+novel"], "--search", "first novel")
         self.assertEqual(exit_code, 0)

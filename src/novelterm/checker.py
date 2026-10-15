@@ -165,11 +165,12 @@ def check_results(
             report.add("title", chapter.title)
             report.add("paragraphs", len(chapter.paragraphs))
             report.add("words", word_count)
+            report.add("images", chapter.image_count)
             report.add("novel link", chapter.novel_url or "-")
             report.add("previous chapter", chapter.previous_url or "-")
             report.add("next chapter", chapter.next_url or "-")
-            if not chapter.paragraphs:
-                report.problems.append("the chapter has no text")
+            if not chapter.paragraphs and not chapter.image_count:
+                report.problems.append("the chapter has no text and no images")
 
 
 def page_url(source: TomlSource, search_query: str | None, given_url: str | None) -> str:

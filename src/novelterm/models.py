@@ -57,3 +57,5 @@ class Chapter:
     paragraphs: list[str]
     previous_url: str | None
     next_url: str | None
+    image_count: int = 0
+    """Images in the chapter body. novelterm shows text only, so it only reports them."""
