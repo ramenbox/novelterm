@@ -13,6 +13,11 @@ dependencies = [
 [project.scripts]
 novelterm = "novelterm.app:main"
 
+[tool.uv]
+# Do not use package versions published in the last 10 days. Kept in the
+# project so that local runs and CI resolve the same lock file.
+exclude-newer = "10 days"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
