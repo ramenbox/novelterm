@@ -7,11 +7,13 @@ from enum import Enum
 from typing import Any
 
 from novelterm.css_selectors import Selector, SelectorError, parse_selector
+from novelterm.network import RequestMethod
 
 SUPPORTED_FORMAT_VERSION = 1
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 VERSION_PATTERN = re.compile(r"^\d+(\.\d+)*$")
 SEARCH_QUERY_PLACEHOLDER = "{query}"
+NOVEL_URL_PLACEHOLDER = "{novel_url}"
 
 
 class SourceFileError(ValueError):
@@ -59,6 +61,15 @@ class LabeledField:
     value: Selector
 
 
+@dataclass(frozen=True)
+class ChapterListRequest:
+    """A second request that returns the chapter list, for sites that do not put it on the novel page."""
+
+    url_template: str
+    """URL with the placeholder {novel_url}. novelterm puts in the novel page URL as it was opened."""
+    method: RequestMethod
+
+
 type FieldRule = Selector | LabeledField
 """A selector for the element, or a value found by its label."""
 
@@ -72,6 +83,8 @@ class NovelRules:
     chapters: Selector
     locked_chapters: Selector | None
     chapter_order: ChapterOrder
+    chapter_list: ChapterListRequest | None
+    """When set, chapters and locked_chapters read the response of this request instead of the novel page."""
 
 
 @dataclass(frozen=True)
@@ -258,6 +271,7 @@ def parse_source_definition(content: str) -> SourceDefinition:
             chapters=novel.required_selector("chapters"),
             locked_chapters=novel.optional_selector("locked_chapters"),
             chapter_order=novel.choice("chapter_order", ChapterOrder, ChapterOrder.OLDEST_FIRST),
+            chapter_list=chapter_list_request(novel.optional_subtable("chapter_list")),
         ),
         chapter=ChapterRules(
             title=chapter.required_selector("title"),
@@ -268,6 +282,15 @@ def parse_source_definition(content: str) -> SourceDefinition:
         ),
         search=search_rules(root.optional_subtable("search")),
     )
+
+
+def chapter_list_request(table: TableReader | None) -> ChapterListRequest | None:
+    if table is None:
+        return None
+    url_template = table.required_text("url")
+    if url_template.count(NOVEL_URL_PLACEHOLDER) != 1:
+        raise SourceFileError(f"'{table.key_name('url')}' must contain {NOVEL_URL_PLACEHOLDER} exactly once")
+    return ChapterListRequest(url_template=url_template, method=table.choice("method", RequestMethod, RequestMethod.GET))
 
 
 def search_rules(search: TableReader | None) -> SearchRules | None:

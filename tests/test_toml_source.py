@@ -3,9 +3,10 @@ from pathlib import Path
 from unittest import mock
 
 from novelterm.html_tree import parse_html
-from novelterm.models import LinkKind, Listing
+from novelterm.models import LinkKind, Listing, NovelDetails
+from novelterm.network import RequestMethod
 from novelterm.sources.definition import SourceFileError, parse_source_definition
-from novelterm.sources.toml_source import TomlSource
+from novelterm.sources.toml_source import ChapterListPage, TomlSource
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "sources" / "example-site.toml"
 
@@ -115,6 +116,11 @@ LABELED_PAGE = """
     <div class="row"><span class="label"> STATUS: </span><span class="value">OnGoing</span></div>"""
 
 
+def parse_page(source: TomlSource, url: str, page: str) -> NovelDetails:
+    document = parse_html(page)
+    return source.parse_novel(url, document, ChapterListPage(url, document))
+
+
 class LabeledFieldTests(unittest.TestCase):
     def source_with_status(self, status_line: str) -> TomlSource:
         content = FIXTURE.read_text(encoding="utf-8").replace('status = "p.status"', status_line)
@@ -122,17 +128,69 @@ class LabeledFieldTests(unittest.TestCase):
 
     def test_value_of_the_row_with_the_label(self) -> None:
         source = self.source_with_status(LABELED_STATUS)
-        novel = source.parse_novel("https://example.org/novel/first", parse_html(LABELED_PAGE))
+        novel = parse_page(source, "https://example.org/novel/first", LABELED_PAGE)
         self.assertEqual(novel.status, "OnGoing")
 
     def test_no_matching_label_gives_no_status(self) -> None:
         source = self.source_with_status(LABELED_STATUS.replace('"status"', '"Author"'))
-        novel = source.parse_novel("https://example.org/novel/first", parse_html(LABELED_PAGE))
+        novel = parse_page(source, "https://example.org/novel/first", LABELED_PAGE)
         self.assertEqual(novel.status, "")
 
     def test_missing_key_in_the_table_is_an_error(self) -> None:
         with self.assertRaisesRegex(SourceFileError, "novel.status.value"):
             self.source_with_status(LABELED_STATUS.replace(', value = "span.value"', ""))
+
+
+CHAPTER_LIST_TABLE = """
+[novel.chapter_list]
+url = "{novel_url}ajax/chapters/"
+method = "post"
+"""
+
+CHAPTER_LIST_PAGES = {
+    ("https://example.org/novel/first/", RequestMethod.GET): '<h1 class="title">First Novel</h1><ul class="free"></ul>',
+    ("https://example.org/novel/first/ajax/chapters/", RequestMethod.POST): """
+        <ul class="locked"><li><a href="../../chapter-3">Chapter 3</a></li></ul>
+        <ul class="free"><li><a href="../../chapter-2">Chapter 2</a></li><li><a href="/novel/first/chapter-1">Chapter 1</a></li></ul>""",
+}
+
+
+class ChapterListRequestTests(unittest.TestCase):
+    def source_with(self, table: str) -> TomlSource:
+        content = FIXTURE.read_text(encoding="utf-8").replace("\n[chapter]", table + "\n[chapter]")
+        return TomlSource(parse_source_definition(content), FIXTURE)
+
+    def test_chapters_come_from_the_second_request(self) -> None:
+        requests: list[tuple[str, RequestMethod]] = []
+
+        def fetch_page(url: str, method: RequestMethod = RequestMethod.GET):
+            requests.append((url, method))
+            return parse_html(CHAPTER_LIST_PAGES[(url, method)])
+
+        source = self.source_with(CHAPTER_LIST_TABLE)
+        with mock.patch("novelterm.sources.toml_source.fetch_document", fetch_page):
+            novel = source.get_novel("https://example.org/novel/first/")
+        self.assertEqual(list(CHAPTER_LIST_PAGES), requests)
+        self.assertEqual(
+            [chapter.url for chapter in novel.chapters],
+            ["https://example.org/novel/first/chapter-1", "https://example.org/novel/first/chapter-2"],
+        )
+        self.assertEqual(novel.locked_chapter_count, 1)
+
+    def test_locked_chapters_are_not_readable_chapters(self) -> None:
+        source = TomlSource(parse_source_definition(FIXTURE.read_text(encoding="utf-8").replace('chapters = "ul.free a"', 'chapters = "ul a"')), FIXTURE)
+        with mock.patch("novelterm.sources.toml_source.fetch_document", fake_fetch_document):
+            novel = source.get_novel("https://example.org/novel/first")
+        self.assertEqual([chapter.title for chapter in novel.chapters], ["Chapter 1", "Chapter 2", "Chapter 3"])
+        self.assertEqual(novel.locked_chapter_count, 1)
+
+    def test_url_needs_the_placeholder(self) -> None:
+        with self.assertRaisesRegex(SourceFileError, "novel.chapter_list.url"):
+            self.source_with(CHAPTER_LIST_TABLE.replace("{novel_url}", "https://example.org/"))
+
+    def test_method_must_be_get_or_post(self) -> None:
+        with self.assertRaisesRegex(SourceFileError, "novel.chapter_list.method"):
+            self.source_with(CHAPTER_LIST_TABLE.replace('"post"', '"put"'))
 
 
 if __name__ == "__main__":

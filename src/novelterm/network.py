@@ -19,6 +19,12 @@ RETRY_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 RATE_LIMITED_SCHEMES = frozenset({"http", "https"})
 
 
+class RequestMethod(Enum):
+    GET = "get"
+    POST = "post"
+    """Sends an empty body. For site endpoints that return a page part, such as a chapter list."""
+
+
 class FetchFailure(Enum):
     BLOCKED = auto()
     """HTTP 401 or 403: the site refuses the request, often because of bot protection."""
@@ -103,10 +109,15 @@ def retry_delay(attempt: int, headers: Message | None) -> float:
             return FIRST_RETRY_DELAY_SECONDS * 2 ** (attempt - 1)
 
 
-def fetch(url: str) -> Response:
+def fetch(url: str, method: RequestMethod = RequestMethod.GET) -> Response:
     """Download one URL. Raises FetchError with the reason when it fails."""
     parsed = urlparse(url)
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    match method:
+        case RequestMethod.GET:
+            body = None
+        case RequestMethod.POST:
+            body = b""
+    request = urllib.request.Request(url, data=body, headers={"User-Agent": USER_AGENT}, method=method.value.upper())
     for attempt in range(1, MAXIMUM_ATTEMPTS + 1):
         if parsed.scheme in RATE_LIMITED_SCHEMES:
             PACER.wait_for(parsed.hostname or "")

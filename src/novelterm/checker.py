@@ -12,10 +12,10 @@ from pathlib import Path
 from novelterm.css_selectors import Selector
 from novelterm.html_tree import Element, fetch_document, parse_html
 from novelterm.models import LinkKind, Listing
-from novelterm.network import FetchError
+from novelterm.network import FetchError, RequestMethod
 from novelterm.sources.definition import FieldRule, LabeledField, SourceFileError
 from novelterm.sources.registry import load_source_file
-from novelterm.sources.toml_source import TomlSource, label_key
+from novelterm.sources.toml_source import ChapterListPage, TomlSource, label_key
 
 TITLE_SAMPLE_SIZE = 3
 
@@ -32,6 +32,8 @@ class SelectorRule:
     key: str
     selector: FieldRule | None
     required: bool
+    reads_chapter_list: bool = False
+    """The selector reads the chapter list response instead of the page."""
 
 
 @dataclass
@@ -77,8 +79,8 @@ def selector_rules(source: TomlSource, kind: PageKind) -> list[SelectorRule]:
                 SelectorRule("novel.title", rules.title, True),
                 SelectorRule("novel.status", rules.status, False),
                 SelectorRule("novel.description", rules.description, False),
-                SelectorRule("novel.chapters", rules.chapters, True),
-                SelectorRule("novel.locked_chapters", rules.locked_chapters, False),
+                SelectorRule("novel.chapters", rules.chapters, True, reads_chapter_list=True),
+                SelectorRule("novel.locked_chapters", rules.locked_chapters, False, reads_chapter_list=True),
             ]
         case PageKind.CHAPTER:
             rules = definition.chapter
@@ -91,19 +93,20 @@ def selector_rules(source: TomlSource, kind: PageKind) -> list[SelectorRule]:
             ]
 
 
-def check_selectors(rules: list[SelectorRule], document: Element, report: Report) -> None:
+def check_selectors(rules: list[SelectorRule], document: Element, chapter_list: ChapterListPage, report: Report) -> None:
     report.lines.append("Selectors:")
     for rule in rules:
+        checked_document = chapter_list.document if rule.reads_chapter_list else document
         match rule.selector:
             case None:
                 report.add(rule.key, "not set")
             case Selector() as selector:
-                count = len(selector.select(document))
+                count = len(selector.select(checked_document))
                 report.add(rule.key, f'"{selector.text}" -> {match_label(count)}')
                 if count == 0 and rule.required:
                     report.problems.append(f"{rule.key}: no element matches \"{selector.text}\"")
             case LabeledField() as field:
-                items = field.item.select(document)
+                items = field.item.select(checked_document)
                 labels = [label for item in items if (label := field.label.select_first(item)) is not None]
                 found = any(label_key(label.text()) == label_key(field.label_text) for label in labels)
                 report.add(
@@ -134,7 +137,9 @@ def check_novel_list_page(source: TomlSource, listing: Listing, url: str, docume
         report.problems.append("no links that match urls.novel_pattern")
 
 
-def check_results(source: TomlSource, kind: PageKind, url: str, document: Element, report: Report) -> None:
+def check_results(
+    source: TomlSource, kind: PageKind, url: str, document: Element, chapter_list: ChapterListPage, report: Report
+) -> None:
     report.lines.append("Result:")
     match (kind, source.definition.search):
         case (PageKind.NOVEL_LIST, _):
@@ -144,7 +149,7 @@ def check_results(source: TomlSource, kind: PageKind, url: str, document: Elemen
         case (PageKind.SEARCH, _):
             check_novel_list_page(source, Listing.SEARCH, url, document, report)
         case (PageKind.NOVEL, _):
-            novel = source.parse_novel(url, document)
+            novel = source.parse_novel(url, document, chapter_list)
             report.add("title", novel.title)
             report.add("status", novel.status or "-")
             report.add("description", f"{len(novel.description)} characters")
@@ -179,15 +184,28 @@ def page_url(source: TomlSource, search_query: str | None, given_url: str | None
             return source.definition.novel_list.page
 
 
-def load_page(url: str, html_file: Path | None) -> Element:
+def load_page(url: str, html_file: Path | None, method: RequestMethod = RequestMethod.GET) -> Element:
     match html_file:
         case Path():
             return parse_html(html_file.read_text(encoding="utf-8", errors="replace"))
         case None:
             try:
-                return fetch_document(url)
+                return fetch_document(url, method)
             except FetchError as error:
                 sys.exit(f"error: {error.explanation()}")
+
+
+def chapter_list_page(
+    source: TomlSource, kind: PageKind, url: str, document: Element, chapter_list_html: Path | None
+) -> ChapterListPage:
+    """The page that the chapter selectors read: the chapter list response, or else the page itself."""
+    match (kind, source.definition.novel.chapter_list):
+        case (PageKind.NOVEL, None) | (PageKind.NOVEL_LIST | PageKind.SEARCH | PageKind.CHAPTER, _):
+            return ChapterListPage(url, document)
+        case (PageKind.NOVEL, request):
+            chapter_list_url = source.chapter_list_url(url)
+            print(f"Chapter list: {request.method.value.upper()} {chapter_list_url}")
+            return ChapterListPage(chapter_list_url, load_page(chapter_list_url, chapter_list_html, request.method))
 
 
 def check_source_command(arguments: list[str]) -> None:
@@ -203,6 +221,12 @@ def check_source_command(arguments: list[str]) -> None:
     parser.add_argument("--search", metavar="TEXT", help="check the [search] table with this search text")
     parser.add_argument("--novel-list", action="store_true", help="URL is a later page of the novel list")
     parser.add_argument("--html", type=Path, metavar="FILE", help="read the page from a saved HTML file instead of the site")
+    parser.add_argument(
+        "--chapter-list-html",
+        type=Path,
+        metavar="FILE",
+        help="read the [novel.chapter_list] response from a saved file instead of the site",
+    )
     options = parser.parse_args(arguments)
 
     try:
@@ -223,10 +247,11 @@ def check_source_command(arguments: list[str]) -> None:
         )
     print(f"Page: {url} ({kind.name.lower().replace('_', ' ')})")
     document = load_page(url, html_file)
+    chapter_list = chapter_list_page(source, kind, url, document, options.chapter_list_html)
 
     report = Report(lines=[], problems=[])
-    check_selectors(selector_rules(source, kind), document, report)
-    check_results(source, kind, url, document, report)
+    check_selectors(selector_rules(source, kind), document, chapter_list, report)
+    check_results(source, kind, url, document, chapter_list, report)
     print("\n".join(report.lines))
     match report.problems:
         case []:

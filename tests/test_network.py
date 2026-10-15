@@ -5,7 +5,7 @@ from email.message import Message
 from unittest import mock
 
 from novelterm import network
-from novelterm.network import FetchError, FetchFailure, HostPacer, fetch
+from novelterm.network import FetchError, FetchFailure, HostPacer, RequestMethod, fetch
 
 
 class FakeResponse(io.BytesIO):
@@ -36,6 +36,18 @@ class FetchTests(unittest.TestCase):
             response = fetch("https://example.org/")
         self.assertEqual((response.content, response.charset), (b"page", "utf-8"))
         sleep.assert_not_called()
+
+    def test_post_sends_an_empty_body(self, sleep: mock.Mock) -> None:
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse(b"list")) as urlopen:
+            fetch("https://example.org/novel/a/ajax/chapters/", RequestMethod.POST)
+        request = urlopen.call_args.args[0]
+        self.assertEqual((request.get_method(), request.data), ("POST", b""))
+
+    def test_get_sends_no_body(self, sleep: mock.Mock) -> None:
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse(b"page")) as urlopen:
+            fetch("https://example.org/")
+        request = urlopen.call_args.args[0]
+        self.assertEqual((request.get_method(), request.data), ("GET", None))
 
     def test_forbidden_is_not_retried(self, sleep: mock.Mock) -> None:
         with mock.patch("urllib.request.urlopen", side_effect=http_error(403)) as urlopen:

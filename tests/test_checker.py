@@ -77,6 +77,26 @@ class CheckSourceTests(unittest.TestCase):
         self.assertIn('item "div.row" -> 2 matches, label "status" found', output.getvalue())
         self.assertRegex(output.getvalue(), r"status\s+OnGoing\n")
 
+    def test_chapter_list_request_uses_the_saved_response(self) -> None:
+        from test_toml_source import CHAPTER_LIST_PAGES, CHAPTER_LIST_TABLE
+
+        source_file = self.temporary_directory / "chapter-list.toml"
+        content = FIXTURE.read_text(encoding="utf-8").replace("\n[chapter]", CHAPTER_LIST_TABLE + "\n[chapter]")
+        source_file.write_text(content, encoding="utf-8")
+        pages = list(CHAPTER_LIST_PAGES.values())
+        html_file = self.temporary_directory / "novel.html"
+        html_file.write_text(pages[0], encoding="utf-8")
+        list_file = self.temporary_directory / "list.html"
+        list_file.write_text(pages[1], encoding="utf-8")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            check_source_command(
+                [str(source_file), "https://example.org/novel/first/", "--html", str(html_file), "--chapter-list-html", str(list_file)]
+            )
+        self.assertIn("Chapter list: POST https://example.org/novel/first/ajax/chapters/", output.getvalue())
+        self.assertIn('novel.chapters         "ul.free a" -> 2 matches', output.getvalue())
+        self.assertRegex(output.getvalue(), r"chapters\s+2\n")
+
     def test_search(self) -> None:
         output, exit_code = self.run_check("", PAGES["https://example.org/search?q=first+novel"], "--search", "first novel")
         self.assertEqual(exit_code, 0)

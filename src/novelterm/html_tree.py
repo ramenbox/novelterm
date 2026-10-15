@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
-from novelterm.network import fetch
+from novelterm.network import RequestMethod, fetch
 
 VOID_TAGS = frozenset(
     {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
@@ -109,6 +109,6 @@ def fetch_bytes(url: str) -> bytes:
     return fetch(url).content
 
 
-def fetch_document(url: str) -> Element:
-    response = fetch(url)
+def fetch_document(url: str, method: RequestMethod = RequestMethod.GET) -> Element:
+    response = fetch(url, method)
     return parse_html(response.content.decode(response.charset or "utf-8", errors="replace"))

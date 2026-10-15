@@ -1,5 +1,6 @@
 """A Source that reads a site with the rules from a source file."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote_plus, urljoin, urlparse
 
@@ -7,6 +8,7 @@ from novelterm.css_selectors import Selector
 from novelterm.html_tree import Element, clean_text, fetch_document
 from novelterm.models import Chapter, ChapterLink, LinkKind, Listing, NovelDetails, NovelListPage, NovelSummary
 from novelterm.sources.definition import (
+    NOVEL_URL_PLACEHOLDER,
     SEARCH_QUERY_PLACEHOLDER,
     ChapterOrder,
     DescriptionText,
@@ -64,7 +66,21 @@ class TomlSource:
                 return search_rules.url_template.replace(SEARCH_QUERY_PLACEHOLDER, quote_plus(query))
 
     def get_novel(self, url: str) -> NovelDetails:
-        return self.parse_novel(url, fetch_document(url))
+        document = fetch_document(url)
+        match self.definition.novel.chapter_list:
+            case None:
+                chapter_list = ChapterListPage(url, document)
+            case request:
+                chapter_list_url = self.chapter_list_url(url)
+                chapter_list = ChapterListPage(chapter_list_url, fetch_document(chapter_list_url, request.method))
+        return self.parse_novel(url, document, chapter_list)
+
+    def chapter_list_url(self, novel_url: str) -> str:
+        match self.definition.novel.chapter_list:
+            case None:
+                raise ValueError(f"source '{self.identifier}' has no [novel.chapter_list] table")
+            case request:
+                return request.url_template.replace(NOVEL_URL_PLACEHOLDER, novel_url)
 
     def get_chapter(self, url: str) -> Chapter:
         return self.parse_chapter(url, fetch_document(url))
@@ -101,7 +117,9 @@ class TomlSource:
                 novels[url] = NovelSummary(title=title, url=url)
         return list(novels.values())
 
-    def parse_novel(self, url: str, document: Element) -> NovelDetails:
+    def parse_novel(self, url: str, document: Element, chapter_list: "ChapterListPage") -> NovelDetails:
+        """Read a novel page. The chapter selectors read chapter_list, which is the novel page itself
+        unless the source sets [novel.chapter_list]."""
         rules = self.definition.novel
         status = field_text(rules.status, document)
         if status.lower().startswith(STATUS_LABEL_PREFIX):
@@ -115,13 +133,19 @@ class TomlSource:
             case (Element(), DescriptionText.ALL):
                 description = clean_text(description_element.text())
 
-        chapters = self.chapter_links(url, rules.chapters.select(document))
+        locked_links = rules.locked_chapters.select(chapter_list.document) if rules.locked_chapters else []
+        locked_chapters = self.chapter_links(chapter_list.url, locked_links)
+        locked_urls = {chapter.url for chapter in locked_chapters}
+        chapters = [
+            chapter
+            for chapter in self.chapter_links(chapter_list.url, rules.chapters.select(chapter_list.document))
+            if chapter.url not in locked_urls
+        ]
         match rules.chapter_order:
             case ChapterOrder.NEWEST_FIRST:
                 chapters.reverse()
             case ChapterOrder.OLDEST_FIRST:
                 pass
-        locked_links = rules.locked_chapters.select(document) if rules.locked_chapters else []
 
         return NovelDetails(
             title=text_of(rules.title.select_first(document)) or url,
@@ -129,7 +153,7 @@ class TomlSource:
             status=status,
             description=description,
             chapters=chapters,
-            locked_chapter_count=len(self.chapter_links(url, locked_links)),
+            locked_chapter_count=len(locked_chapters),
         )
 
     def parse_chapter(self, url: str, document: Element) -> Chapter:
@@ -155,6 +179,14 @@ class TomlSource:
     def chapter_link_url(self, page_url: str, link: Element | None) -> str | None:
         url = absolute_link(page_url, link) if link else None
         return url if url and self.link_kind(url) == LinkKind.CHAPTER else None
+
+
+@dataclass(frozen=True)
+class ChapterListPage:
+    """The page that holds the chapter links, and its URL for relative links."""
+
+    url: str
+    document: Element
 
 
 def first(selector: Selector | None, document: Element) -> Element | None:

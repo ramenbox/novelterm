@@ -150,8 +150,12 @@ status = "div.status"                  # optional; a leading "Status:" is remove
 description = "div.summary"            # optional
 description_text = "all"               # optional: "all" (default) or "own" (text outside child elements)
 chapters = "ul.chapter-list a"         # only links that match chapter_pattern count
-locked_chapters = "ul.locked a"        # optional; only counted, never shown
+locked_chapters = "ul.locked a"        # optional; only counted, never shown, never in the chapter list
 chapter_order = "oldest_first"         # optional: "oldest_first" (default) or "newest_first"
+
+[novel.chapter_list]                   # optional table, for sites that load the chapter list separately
+url = "{novel_url}chapters/"           # {novel_url} is replaced by the novel page URL
+method = "get"                         # optional: "get" (default) or "post"
 
 [chapter]
 title = "h1.chapter-title"
@@ -165,6 +169,13 @@ url = "https://example.org/?s={query}" # {query} is replaced by the URL-encoded 
 results = "div.search-results a"       # links to novel pages; only links that match novel_pattern count
 next_page = "a.next-page"              # optional; link to the next page of results
 ```
+
+Chapter list request: with `[novel.chapter_list]`, novelterm sends a second request
+after the novel page, and `chapters` and `locked_chapters` read its response instead
+of the novel page. `{novel_url}` is the novel page URL exactly as it was opened, so
+links to novel pages must have the same form (for example, with a trailing `/`).
+Relative links in the response are resolved against the request URL. `post` sends
+an empty body; form data and custom headers are not supported.
 
 Labeled field: some pages show rows of label and value, such as "Release: 2025" and
 "Status: Ongoing", with the same markup for each row. A labeled field picks the row
@@ -199,6 +210,7 @@ novelterm check-source example-site.toml https://example.org/novel/first/chapter
 novelterm check-source example-site.toml --search "first"      # [search] table
 novelterm check-source example-site.toml https://example.org/novels/page/2 --novel-list
 novelterm check-source example-site.toml URL --html saved.html # use a saved page
+novelterm check-source example-site.toml URL --html saved.html --chapter-list-html list.html
 ```
 
 The command prints the match count of each selector and what novelterm reads from
